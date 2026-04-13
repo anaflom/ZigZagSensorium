@@ -22,7 +22,7 @@ CONDA_ENV="topofisher_gpu"
 cd "$WORKDIR"
 mkdir -p logs results
 
-# Activate virtual environment
+# Activate virtual environment (venv needs Python 3.13)
 source "${VENV_DIR}/bin/activate"
 export PYTHONUNBUFFERED=1
 
