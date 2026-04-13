@@ -25,7 +25,7 @@
 set -euo pipefail
 
 # --- Configuration -----------------------------------------------------------
-PROJECT_DIR="/u/mdmc/anaflom/ZigZagSensorium"
+PROJECT_DIR="/u/mdmc/anaflom/projects_mdmc/ZigZagSensorium"
 DATA_ROOT="/orfeo/scratch/area/ygardinazzi/sensorium_2026/derivatives/grid-15x15x10_norm-by_minmax"
 VENV_DIR="${PROJECT_DIR}/.venv"
 SCRIPT="${PROJECT_DIR}/scripts/compute_zigzag.py"
