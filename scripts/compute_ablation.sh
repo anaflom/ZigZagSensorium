@@ -36,7 +36,7 @@ echo "============================================"
 
 
 # Run ablation on all mice (pass --mouse 0 1 2 to select specific mice)
-python3 -u scripts/run_ablation.py "$@"
+python3 -u scripts/compute_ablation.py "$@"
 
 echo "============================================"
 echo "Finished:     $(date)"
