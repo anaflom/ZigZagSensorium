@@ -1,0 +1,9 @@
+# Requirements for compute_zigzag.py 
+# Install with: pip install -r requirements.txt
+
+numpy>=1.23
+tqdm>=4.60
+
+
+# Local zigzag package used by the scripts
+-e ./zz-top[all]
