@@ -1,9 +1,13 @@
-# Requirements for compute_zigzag.py 
 # Install with: pip install -r requirements.txt
 
+# Common utilities
 numpy>=1.23
 tqdm>=4.60
 
-
-# Local zigzag package used by the scripts
+# Required by scripts/compute_zigzag.py
 -e ./zz-top[all]
+
+# Required by scripts/compute_ablation.py
+pandas>=1.5
+scikit-learn>=1.2
+torch>=2.0
