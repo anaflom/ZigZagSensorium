@@ -1,0 +1,40 @@
+__pycache__/
+*.py[cod]
+
+# Virtual environment
+.venv/
+venv/
+env/
+
+# Notebooks
+.ipynb_checkpoints/
+
+# Tests
+tests/
+
+# IDE
+.vscode/
+.idea/
+
+# Local env files
+.env
+.env.*
+
+# Local arrays
+*.npy
+
+# compiled files
+*.so
+
+# Logs
+logs/
+*_logs/
+
+# Package installation / build artifacts
+*.egg-info/
+dist/
+build/
+*.egg
+.eggs/
+pip-wheel-metadata/
+MANIFEST
