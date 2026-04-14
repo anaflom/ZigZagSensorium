@@ -8,6 +8,8 @@ env/
 
 # Notebooks
 .ipynb_checkpoints/
+notebooks/.ipynb_checkpoints/
+notebooks/cache/
 
 # Tests
 tests/
@@ -38,3 +40,7 @@ build/
 .eggs/
 pip-wheel-metadata/
 MANIFEST
+
+
+# ZZ-top 
+zz-top/

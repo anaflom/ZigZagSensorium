@@ -11,3 +11,6 @@ tqdm>=4.60
 pandas>=1.5
 scikit-learn>=1.2
 torch>=2.0
+
+# Required by notebooks/*
+matplotlib>=3.7
