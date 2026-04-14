@@ -36,6 +36,22 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 
+def str_to_bool(value: str) -> bool:
+    """Parse common string representations of booleans for argparse."""
+    if isinstance(value, bool):
+        return value
+
+    normalized = value.strip().lower()
+    if normalized in {"true", "1", "yes", "y", "t", "on"}:
+        return True
+    if normalized in {"false", "0", "no", "n", "f", "off"}:
+        return False
+
+    raise argparse.ArgumentTypeError(
+        f"Invalid boolean value '{value}'. Use true/false."
+    )
+
+
 def compute_threshold(data: np.ndarray, p_active: float) -> float:
     """Compute the activation threshold from a percentile of positive values.
 
@@ -143,7 +159,7 @@ def main():
     )
     parser.add_argument(
         "--p-active-per-trial",
-        type=bool,
+        type=str_to_bool,
         default=True,
         help="Whether to compute p_active per trial (default: True).",
     )

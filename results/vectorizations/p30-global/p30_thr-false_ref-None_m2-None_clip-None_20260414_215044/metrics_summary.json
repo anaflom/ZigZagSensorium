@@ -1,0 +1,114 @@
+{
+  "status": {
+    "2": "done",
+    "3": "done",
+    "4": "done",
+    "5": "done",
+    "6": "done",
+    "7": "done",
+    "7b": "done",
+    "8": "done"
+  },
+  "resolved": {
+    "ref_mouse": "dynamic29156-11-10-Video-8744edeac3b4d1ce16b680916b5267ce",
+    "mouse_2": null,
+    "clip_frames": 240
+  },
+  "n_figures": 7,
+  "figures": [
+    "/u/mdmc/anaflom/projects_mdmc/ZigZagSensorium/results/vectorizations/p30-global/p30_thr-false_ref-None_m2-None_clip-None_20260414_215044/figures/01_03_feature_matrices.png",
+    "/u/mdmc/anaflom/projects_mdmc/ZigZagSensorium/results/vectorizations/p30-global/p30_thr-false_ref-None_m2-None_clip-None_20260414_215044/figures/02_03_sample_feature_vectors.png",
+    "/u/mdmc/anaflom/projects_mdmc/ZigZagSensorium/results/vectorizations/p30-global/p30_thr-false_ref-None_m2-None_clip-None_20260414_215044/figures/03_04_pairwise_cosine_distances.png",
+    "/u/mdmc/anaflom/projects_mdmc/ZigZagSensorium/results/vectorizations/p30-global/p30_thr-false_ref-None_m2-None_clip-None_20260414_215044/figures/04_05_pca_projections.png",
+    "/u/mdmc/anaflom/projects_mdmc/ZigZagSensorium/results/vectorizations/p30-global/p30_thr-false_ref-None_m2-None_clip-None_20260414_215044/figures/05_06_representational_similarity.png",
+    "/u/mdmc/anaflom/projects_mdmc/ZigZagSensorium/results/vectorizations/p30-global/p30_thr-false_ref-None_m2-None_clip-None_20260414_215044/figures/06_07b_stimulus_classification.png",
+    "/u/mdmc/anaflom/projects_mdmc/ZigZagSensorium/results/vectorizations/p30-global/p30_thr-false_ref-None_m2-None_clip-None_20260414_215044/figures/07_07b_best_vectorizer_confusion_matrix.png"
+  ],
+  "cross_mouse_results": {},
+  "stim_results": {
+    "PersImage": {
+      "mean_acc": 0.9714285714285715,
+      "std_acc": 0.05714285714285716,
+      "mean_f1": 0.9111111111111111,
+      "std_f1": 0.1777777777777778,
+      "n_features": 400
+    },
+    "Landscape": {
+      "mean_acc": 0.14285714285714285,
+      "std_acc": 0.28571428571428575,
+      "mean_f1": 0.05555555555555556,
+      "std_f1": 0.11111111111111112,
+      "n_features": 500
+    },
+    "Silhouette": {
+      "mean_acc": 0.14285714285714285,
+      "std_acc": 0.28571428571428575,
+      "mean_f1": 0.05555555555555556,
+      "std_f1": 0.11111111111111112,
+      "n_features": 100
+    },
+    "BettiCurve": {
+      "mean_acc": 0.9714285714285715,
+      "std_acc": 0.05714285714285716,
+      "mean_f1": 0.9111111111111111,
+      "std_f1": 0.1777777777777778,
+      "n_features": 100
+    },
+    "PersEntropy": {
+      "mean_acc": 0.9714285714285715,
+      "std_acc": 0.05714285714285716,
+      "mean_f1": 0.9111111111111111,
+      "std_f1": 0.1777777777777778,
+      "n_features": 1
+    },
+    "PersStats": {
+      "mean_acc": 0.9714285714285715,
+      "std_acc": 0.05714285714285716,
+      "mean_f1": 0.9111111111111111,
+      "std_f1": 0.1777777777777778,
+      "n_features": 9
+    },
+    "BettiProfile": {
+      "mean_acc": 0.9714285714285715,
+      "std_acc": 0.05714285714285716,
+      "mean_f1": 0.9111111111111111,
+      "std_f1": 0.1777777777777778,
+      "n_features": 240
+    },
+    "BirthFreq": {
+      "mean_acc": 0.14285714285714285,
+      "std_acc": 0.28571428571428575,
+      "mean_f1": 0.05555555555555556,
+      "std_f1": 0.11111111111111112,
+      "n_features": 240
+    },
+    "PersProfile": {
+      "mean_acc": 0.14285714285714285,
+      "std_acc": 0.28571428571428575,
+      "mean_f1": 0.05555555555555556,
+      "std_f1": 0.11111111111111112,
+      "n_features": 240
+    },
+    "Turnover": {
+      "mean_acc": 0.9714285714285715,
+      "std_acc": 0.05714285714285716,
+      "mean_f1": 0.9111111111111111,
+      "std_f1": 0.1777777777777778,
+      "n_features": 240
+    },
+    "EffPI": {
+      "mean_acc": 0.9714285714285715,
+      "std_acc": 0.05714285714285716,
+      "mean_f1": 0.9111111111111111,
+      "std_f1": 0.1777777777777778,
+      "n_features": 400
+    },
+    "CumPers": {
+      "mean_acc": 0.9714285714285715,
+      "std_acc": 0.05714285714285716,
+      "mean_f1": 0.9111111111111111,
+      "std_f1": 0.1777777777777778,
+      "n_features": 240
+    }
+  }
+}

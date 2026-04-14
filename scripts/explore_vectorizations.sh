@@ -5,7 +5,7 @@
 #SBATCH --nodes=1
 #SBATCH --ntasks=1
 #SBATCH --cpus-per-task=8
-#SBATCH --mem=60G
+#SBATCH --mem=100G
 #SBATCH --time=24:00:00
 #SBATCH --output=logs/slurm-zz-vectorizations-%j.out
 #SBATCH --error=logs/slurm-zz-vectorizations-%j.err
@@ -39,10 +39,18 @@ VENV_DIR="${PROJECT_DIR}/.venv"
 
 DATA_ROOT="${DATA_ROOT:-/orfeo/scratch/area/ygardinazzi/sensorium_2026/derivatives/grid-15x15x10_norm-by_minmax}"
 META_ROOT="${META_ROOT:-/u/mdmc/anaflom/projects_mdmc/sensorium/metadata}"
-OUTPUT_BASE="${OUTPUT_BASE:-${PROJECT_DIR}/results/vectorizations}"
 
 P_ACTIVE="${P_ACTIVE:-30}"
 PER_TRIAL_THRESH="${PER_TRIAL_THRESH:-true}"
+
+PER_TRIAL_THRESH_NORM="$(echo "${PER_TRIAL_THRESH}" | tr '[:upper:]' '[:lower:]')"
+if [[ "${PER_TRIAL_THRESH_NORM}" == "true" ]]; then
+  OUTPUT_SUFFIX="per-trial"
+else
+  OUTPUT_SUFFIX="global"
+fi
+
+OUTPUT_BASE="${OUTPUT_BASE:-${PROJECT_DIR}/results/vectorizations/p${P_ACTIVE}-${OUTPUT_SUFFIX}}"
 
 # Optional inputs accepted by the Python script.
 # Use literal "None" to trigger auto behavior.
