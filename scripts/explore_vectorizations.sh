@@ -5,7 +5,7 @@
 #SBATCH --nodes=1
 #SBATCH --ntasks=1
 #SBATCH --cpus-per-task=8
-#SBATCH --mem=100G
+#SBATCH --mem=80G
 #SBATCH --time=24:00:00
 #SBATCH --output=logs/slurm-zz-vectorizations-%j.out
 #SBATCH --error=logs/slurm-zz-vectorizations-%j.err

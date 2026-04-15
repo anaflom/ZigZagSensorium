@@ -8,6 +8,10 @@ one task per mouse.
 Usage:
     python run_zigzag.py --mouse-dir <path> --p-active 30 [--n-workers 32]
 
+Input:
+    <mouse-dir>/trials_grid/
+        grid-..._<original_trial_filename>.npy  (one per trial)
+
 Output:
     <mouse-dir>/trials_zz-thresh-<p_active>/
         zz-thresh-<p_active>_<original_trial_filename>.npy   (one per trial)
@@ -149,7 +153,7 @@ def main():
         "--mouse-dir",
         type=str,
         required=True,
-        help="Path to the mouse directory (containing a 'trials/' subfolder).",
+        help="Path to the mouse directory (containing a 'trials_grid/' subfolder).",
     )
     parser.add_argument(
         "--p-active",
@@ -202,7 +206,7 @@ def main():
     args = parser.parse_args()
 
     mouse_dir = Path(args.mouse_dir)
-    trials_dir = mouse_dir / "trials"
+    trials_dir = mouse_dir / "trials_grid"
 
     if not trials_dir.is_dir():
         logger.error(f"Trials directory not found: {trials_dir}")

@@ -28,7 +28,7 @@ from contextlib import redirect_stderr, redirect_stdout
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
-from typing import Dict, Iterable, List, Optional, Sequence, Set, Tuple
+from typing import Dict, List, Optional, Sequence, Set
 
 import matplotlib
 
@@ -37,7 +37,6 @@ matplotlib.use("Agg")
 
 import matplotlib.pyplot as plt
 import numpy as np
-import pandas as pd
 from scipy.spatial.distance import pdist, squareform
 from sklearn.decomposition import PCA
 from sklearn.linear_model import LogisticRegression
@@ -66,6 +65,12 @@ from zztop.vectorizations import (
     TurnoverRate,
 )
 from zztop.vectorizations._diagram import normalize_diagram
+
+from utils import (
+    clip_barcodes,
+    load_labelled_barcodes,
+    load_zigzag_barcodes,
+)
 
 
 @dataclass
@@ -153,32 +158,6 @@ def _discover_mice(data_root: Path) -> List[str]:
     )
 
 
-def load_zigzag_barcodes(
-    data_root: Path,
-    mouse_name: str,
-    zz_folder: str,
-    max_trials: Optional[int] = None,
-) -> Tuple[List[List[Tuple[float, float, float]]], List[str]]:
-    """Load zigzag barcode files for one mouse."""
-    zz_dir = data_root / mouse_name / zz_folder
-    files = sorted(zz_dir.glob("zz-thresh-*.npy"))
-    files = [f for f in files if "info" not in f.name]
-
-    if max_trials is not None and files:
-        indices = np.linspace(0, len(files) - 1, min(max_trials, len(files)), dtype=int)
-        files = [files[i] for i in indices]
-
-    barcodes: List[List[Tuple[float, float, float]]] = []
-    trial_names: List[str] = []
-    for fpath in files:
-        raw = np.load(fpath, allow_pickle=True)
-        bars = [tuple(row) for row in raw]
-        barcodes.append(bars)
-        trial_names.append(fpath.stem)
-
-    return barcodes, trial_names
-
-
 def find_ref_mouse(
     mice: Sequence[str], data_root: Path, zz_folder: str, provided: Optional[str]
 ) -> Optional[str]:
@@ -207,65 +186,6 @@ def find_second_mouse(
         if zz_dir.is_dir() and len(list(zz_dir.glob("*.npy"))) > 10:
             return m
     return None
-
-
-def load_trial_metadata(meta_root: Path, mouse_name: str) -> pd.DataFrame:
-    csv_path = meta_root / mouse_name / "trials" / f"meta-trials_{mouse_name}.csv"
-    if not csv_path.exists():
-        raise FileNotFoundError(f"Metadata not found: {csv_path}")
-    return pd.read_csv(csv_path)
-
-
-def load_labelled_barcodes(
-    data_root: Path,
-    meta_root: Path,
-    mouse_name: str,
-    zz_folder: str,
-) -> Tuple[List[List[Tuple[float, float, float]]], np.ndarray, List[int], np.ndarray]:
-    """Load barcodes and attach stimulus labels from metadata."""
-    df = load_trial_metadata(meta_root, mouse_name)
-    trial_to_label = dict(zip(df["trial"].astype(int), df["label"]))
-    trial_to_frames = dict(zip(df["trial"].astype(int), df["valid_frames"].astype(int)))
-
-    zz_dir = data_root / mouse_name / zz_folder
-    files = sorted(zz_dir.glob("zz-thresh-*.npy"))
-    files = [f for f in files if "info" not in f.name]
-
-    barcodes: List[List[Tuple[float, float, float]]] = []
-    labels_list: List[str] = []
-    trial_ids: List[int] = []
-    frames_list: List[int] = []
-
-    for fpath in files:
-        match = re.search(r"trial-(\d+)$", fpath.stem)  # anchor the search to the end of the filename to avoid partial matches
-        if match is None:
-            continue
-        trial_num = int(match.group(1))
-        if trial_num not in trial_to_label:
-            continue
-
-        raw = np.load(fpath, allow_pickle=True)
-        bars = [tuple(row) for row in raw]
-        barcodes.append(bars)
-        labels_list.append(trial_to_label[trial_num])
-        trial_ids.append(trial_num)
-        frames_list.append(trial_to_frames[trial_num])
-
-    return barcodes, np.array(labels_list), trial_ids, np.array(frames_list)
-
-
-def clip_barcodes(
-    barcodes: Iterable[Iterable[Tuple[float, float, float]]], n_frames: int
-) -> List[List[Tuple[float, float, float]]]:
-    clipped: List[List[Tuple[float, float, float]]] = []
-    for bars in barcodes:
-        new_bars: List[Tuple[float, float, float]] = []
-        for dim, b, d in bars:
-            if b >= n_frames:
-                continue
-            new_bars.append((dim, b, min(d, n_frames)))
-        clipped.append(new_bars)
-    return clipped
 
 
 def make_vectorizers() -> Dict[str, object]:

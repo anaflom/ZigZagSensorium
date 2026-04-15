@@ -13,13 +13,11 @@ Usage:
 
 import argparse
 import json
-import re
 import sys
 import time
 from pathlib import Path
 
 import numpy as np
-import pandas as pd
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
@@ -30,6 +28,12 @@ from sklearn.model_selection import StratifiedKFold, cross_validate
 from sklearn.linear_model import LogisticRegression
 from sklearn.pipeline import Pipeline
 from sklearn.metrics import f1_score, accuracy_score
+
+from utils import (
+    build_vectorization_cache_stem,
+    load_labelled_barcodes,
+    load_vectorization_cache,
+)
 
 # ── Paths ────────────────────────────────────────────────────────────────────
 DATA_ROOT = Path("/orfeo/scratch/area/ygardinazzi/sensorium_2026/derivatives/"
@@ -42,6 +46,7 @@ OUT_DIR   = Path("/u/mdmc/anaflom/projects_mdmc/ZigZagSensorium/results")
 
 P_ACTIVE  = 30
 ZZ_FOLDER = f"trials_zz-thresh-{P_ACTIVE}"
+PER_TRIAL_THRESH = False
 
 DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
@@ -49,38 +54,53 @@ DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 # ══════════════════════════════════════════════════════════════════════════════
 #  Data helpers
 # ══════════════════════════════════════════════════════════════════════════════
+def load_turnover_cache(mouse_name):
+    cache_stem = build_vectorization_cache_stem(
+        mouse_name=mouse_name,
+        method="Turnover",
+        p_active=P_ACTIVE,
+        per_trial_thresh=PER_TRIAL_THRESH,
+        clip_frames=None,
+    )
+    candidate_paths = [
+        CACHE_DIR / f"{cache_stem}.npz",
+        CACHE_DIR / f"turnover_{mouse_name}.npz",  # legacy notebook cache naming
+    ]
 
-def load_trial_metadata(mouse_name):
-    csv_path = META_ROOT / mouse_name / "trials" / f"meta-trials_{mouse_name}.csv"
-    return pd.read_csv(csv_path)
+    cache_file = next((p for p in candidate_paths if p.exists()), None)
+    if cache_file is None:
+        raise FileNotFoundError(
+            "No turnover cache found. Expected one of: "
+            + ", ".join(str(p) for p in candidate_paths)
+        )
+
+    data = load_vectorization_cache(cache_file)
+    x_key = "X" if "X" in data else "features"
+    if x_key not in data or "labels" not in data:
+        raise KeyError(f"Cache missing required keys in {cache_file}")
+
+    clip_raw = data.get("clip_frames", -1)
+    clip_val = int(np.asarray(clip_raw).item())
+    if clip_val < 0:
+        raise ValueError(
+            f"Cache {cache_file} has invalid clip_frames={clip_val}; regenerate cache with clipping."
+        )
+    return np.asarray(data[x_key]), np.asarray(data["labels"]), clip_val
 
 
 def get_trial_info(mouse_name):
-    df = load_trial_metadata(mouse_name)
-    trial_to_label  = dict(zip(df["trial"].astype(int), df["label"]))
-    trial_to_frames = dict(zip(df["trial"].astype(int), df["valid_frames"].astype(int)))
-
-    zz_dir = DATA_ROOT / mouse_name / ZZ_FOLDER
-    files = sorted(f for f in zz_dir.glob("zz-thresh-*.npy") if "info" not in f.name)
-
-    trials = []
-    for f in files:
-        match = re.search(r"trial-(\d+)", f.stem)
-        if match is None:
-            continue
-        tid = int(match.group(1))
-        if tid not in trial_to_label:
-            continue
-        trials.append((tid, trial_to_label[tid], trial_to_frames[tid]))
+    _, labels_arr, trial_ids, frames_arr = load_labelled_barcodes(
+        DATA_ROOT,
+        META_ROOT,
+        mouse_name,
+        ZZ_FOLDER,
+        max_trials=None,
+    )
+    trials = [
+        (int(tid), str(label), int(frames))
+        for tid, label, frames in zip(trial_ids, labels_arr, frames_arr)
+    ]
     return trials
-
-
-def load_turnover_cache(mouse_name):
-    cache_file = CACHE_DIR / f"turnover_{mouse_name}.npz"
-    if not cache_file.exists():
-        raise FileNotFoundError(f"Run notebook 03 first to generate {cache_file}")
-    data = np.load(cache_file, allow_pickle=True)
-    return data["X"], data["labels"], int(data["clip_frames"])
 
 
 # ══════════════════════════════════════════════════════════════════════════════
