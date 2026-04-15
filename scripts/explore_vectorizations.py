@@ -237,7 +237,7 @@ def load_labelled_barcodes(
     frames_list: List[int] = []
 
     for fpath in files:
-        match = re.search(r"trial-(\d+)", fpath.stem)
+        match = re.search(r"trial-(\d+)$", fpath.stem)  # anchor the search to the end of the filename to avoid partial matches
         if match is None:
             continue
         trial_num = int(match.group(1))
