@@ -34,7 +34,7 @@ SCRIPT="${PROJECT_DIR}/scripts/compute_zigzag.py"
 P_ACTIVE="${P_ACTIVE:-30}"
 
 # Set p active per trial to True to compute separate thresholds for each trial (overrides p_active)
-P_ACTIVE_PER_TRIAL="${P_ACTIVE_PER_TRIAL:-False}"
+P_ACTIVE_PER_TRIAL="${P_ACTIVE_PER_TRIAL:-True}"
 
 # Number of parallel workers (match cpus-per-task)
 N_WORKERS="${SLURM_CPUS_PER_TASK:-32}"

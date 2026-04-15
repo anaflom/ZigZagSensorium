@@ -41,7 +41,7 @@ DATA_ROOT="${DATA_ROOT:-/orfeo/scratch/area/ygardinazzi/sensorium_2026/derivativ
 META_ROOT="${META_ROOT:-/u/mdmc/anaflom/projects_mdmc/sensorium/metadata}"
 
 P_ACTIVE="${P_ACTIVE:-30}"
-PER_TRIAL_THRESH="${PER_TRIAL_THRESH:-true}"
+PER_TRIAL_THRESH="${PER_TRIAL_THRESH:-false}"
 
 PER_TRIAL_THRESH_NORM="$(echo "${PER_TRIAL_THRESH}" | tr '[:upper:]' '[:lower:]')"
 if [[ "${PER_TRIAL_THRESH_NORM}" == "true" ]]; then

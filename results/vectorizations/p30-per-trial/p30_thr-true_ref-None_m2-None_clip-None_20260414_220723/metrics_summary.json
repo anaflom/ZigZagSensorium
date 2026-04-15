@@ -1,0 +1,201 @@
+{
+  "status": {
+    "2": "done",
+    "3": "done",
+    "4": "done",
+    "5": "done",
+    "6": "done",
+    "7": "done",
+    "7b": "done",
+    "8": "done"
+  },
+  "resolved": {
+    "ref_mouse": "dynamic29156-11-10-Video-8744edeac3b4d1ce16b680916b5267ce",
+    "mouse_2": "dynamic29228-2-10-Video-8744edeac3b4d1ce16b680916b5267ce",
+    "clip_frames": 240
+  },
+  "n_figures": 8,
+  "figures": [
+    "/u/mdmc/anaflom/projects_mdmc/ZigZagSensorium/results/vectorizations/p30-per-trial/p30_thr-true_ref-None_m2-None_clip-None_20260414_220723/figures/01_03_feature_matrices.png",
+    "/u/mdmc/anaflom/projects_mdmc/ZigZagSensorium/results/vectorizations/p30-per-trial/p30_thr-true_ref-None_m2-None_clip-None_20260414_220723/figures/02_03_sample_feature_vectors.png",
+    "/u/mdmc/anaflom/projects_mdmc/ZigZagSensorium/results/vectorizations/p30-per-trial/p30_thr-true_ref-None_m2-None_clip-None_20260414_220723/figures/03_04_pairwise_cosine_distances.png",
+    "/u/mdmc/anaflom/projects_mdmc/ZigZagSensorium/results/vectorizations/p30-per-trial/p30_thr-true_ref-None_m2-None_clip-None_20260414_220723/figures/04_05_pca_projections.png",
+    "/u/mdmc/anaflom/projects_mdmc/ZigZagSensorium/results/vectorizations/p30-per-trial/p30_thr-true_ref-None_m2-None_clip-None_20260414_220723/figures/05_06_representational_similarity.png",
+    "/u/mdmc/anaflom/projects_mdmc/ZigZagSensorium/results/vectorizations/p30-per-trial/p30_thr-true_ref-None_m2-None_clip-None_20260414_220723/figures/06_07_cross_mouse_classification.png",
+    "/u/mdmc/anaflom/projects_mdmc/ZigZagSensorium/results/vectorizations/p30-per-trial/p30_thr-true_ref-None_m2-None_clip-None_20260414_220723/figures/07_07b_stimulus_classification.png",
+    "/u/mdmc/anaflom/projects_mdmc/ZigZagSensorium/results/vectorizations/p30-per-trial/p30_thr-true_ref-None_m2-None_clip-None_20260414_220723/figures/08_07b_best_vectorizer_confusion_matrix.png"
+  ],
+  "cross_mouse_results": {
+    "PI_20x20_s1": {
+      "mean_acc": 0.8693847294292067,
+      "std_acc": 0.00807911468904662,
+      "n_features": 1200
+    },
+    "PI_20x20_s2": {
+      "mean_acc": 0.9065974796145293,
+      "std_acc": 0.017993113321150243,
+      "n_features": 1200
+    },
+    "PI_30x30_s1": {
+      "mean_acc": 0.865858660736348,
+      "std_acc": 0.029283928038203292,
+      "n_features": 2700
+    },
+    "Landscape_5": {
+      "mean_acc": 0.9023894242648876,
+      "std_acc": 0.02747864076783746,
+      "n_features": 1500
+    },
+    "Landscape_10": {
+      "mean_acc": 0.9150333580429949,
+      "std_acc": 0.02254718143671667,
+      "n_features": 3000
+    },
+    "Silhouette_p1": {
+      "mean_acc": 0.8841339263652088,
+      "std_acc": 0.013820545513481317,
+      "n_features": 300
+    },
+    "Silhouette_p2": {
+      "mean_acc": 0.923451939708426,
+      "std_acc": 0.010289692873570878,
+      "n_features": 300
+    },
+    "BettiCurve_100": {
+      "mean_acc": 0.7500172967630343,
+      "std_acc": 0.03422071126616513,
+      "n_features": 300
+    },
+    "BettiCurve_200": {
+      "mean_acc": 0.7528416110699283,
+      "std_acc": 0.033649593049031985,
+      "n_features": 600
+    },
+    "Entropy": {
+      "mean_acc": 0.7717642698295034,
+      "std_acc": 0.026396982902467843,
+      "n_features": 3
+    },
+    "Statistics": {
+      "mean_acc": 0.860229799851742,
+      "std_acc": 0.030427282901004597,
+      "n_features": 27
+    },
+    "BettiProfile": {
+      "mean_acc": 0.7430096367679763,
+      "std_acc": 0.02516835244302134,
+      "n_features": 972
+    },
+    "BirthFreq": {
+      "mean_acc": 0.710689399555226,
+      "std_acc": 0.018422351707411386,
+      "n_features": 972
+    },
+    "PersProfile": {
+      "mean_acc": 0.8251544353842352,
+      "std_acc": 0.013591409978930009,
+      "n_features": 972
+    },
+    "Turnover": {
+      "mean_acc": 0.7598369162342477,
+      "std_acc": 0.0282506353934991,
+      "n_features": 972
+    },
+    "EffPI": {
+      "mean_acc": 0.8609340252038548,
+      "std_acc": 0.017193862435649056,
+      "n_features": 1200
+    },
+    "CumPers": {
+      "mean_acc": 0.7781047689646653,
+      "std_acc": 0.01911192308030834,
+      "n_features": 972
+    }
+  },
+  "stim_results": {
+    "PersImage": {
+      "mean_acc": 0.8305555555555555,
+      "std_acc": 0.012108052620946325,
+      "mean_f1": 0.6928806097599495,
+      "std_f1": 0.04081332097635346,
+      "n_features": 1200
+    },
+    "Landscape": {
+      "mean_acc": 0.7083333333333333,
+      "std_acc": 0.017010345435994275,
+      "mean_f1": 0.5372935369436643,
+      "std_f1": 0.056768769721124164,
+      "n_features": 1500
+    },
+    "Silhouette": {
+      "mean_acc": 0.7180555555555556,
+      "std_acc": 0.016197088596792485,
+      "mean_f1": 0.6269545440251157,
+      "std_f1": 0.038187195315724974,
+      "n_features": 300
+    },
+    "BettiCurve": {
+      "mean_acc": 0.8305555555555557,
+      "std_acc": 0.017894581564895994,
+      "mean_f1": 0.7122973485789565,
+      "std_f1": 0.027101317497017063,
+      "n_features": 300
+    },
+    "PersEntropy": {
+      "mean_acc": 0.5291666666666667,
+      "std_acc": 0.016077551253875336,
+      "mean_f1": 0.4276867942382691,
+      "std_f1": 0.010088396129310088,
+      "n_features": 3
+    },
+    "PersStats": {
+      "mean_acc": 0.7333333333333333,
+      "std_acc": 0.016782008296659115,
+      "mean_f1": 0.6408291153622384,
+      "std_f1": 0.029877223035994785,
+      "n_features": 27
+    },
+    "BettiProfile": {
+      "mean_acc": 0.8444444444444443,
+      "std_acc": 0.01734721666221781,
+      "mean_f1": 0.7246088467716374,
+      "std_f1": 0.03282820371762256,
+      "n_features": 720
+    },
+    "BirthFreq": {
+      "mean_acc": 0.8,
+      "std_acc": 0.019344983718311292,
+      "mean_f1": 0.6584072961485152,
+      "std_f1": 0.03740873657030036,
+      "n_features": 720
+    },
+    "PersProfile": {
+      "mean_acc": 0.8458333333333334,
+      "std_acc": 0.0349713286444838,
+      "mean_f1": 0.7372002776725043,
+      "std_f1": 0.05012053940166653,
+      "n_features": 720
+    },
+    "Turnover": {
+      "mean_acc": 0.8819444444444444,
+      "std_acc": 0.015835769793043575,
+      "mean_f1": 0.7681596843127945,
+      "std_f1": 0.04349501600201454,
+      "n_features": 720
+    },
+    "EffPI": {
+      "mean_acc": 0.8319444444444445,
+      "std_acc": 0.015466012118972274,
+      "mean_f1": 0.6984985126749697,
+      "std_f1": 0.03269706558424201,
+      "n_features": 1200
+    },
+    "CumPers": {
+      "mean_acc": 0.763888888888889,
+      "std_acc": 0.024453912307859735,
+      "mean_f1": 0.6035577966016348,
+      "std_f1": 0.02250025366908273,
+      "n_features": 720
+    }
+  }
+}
