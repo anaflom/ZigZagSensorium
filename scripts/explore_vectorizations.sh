@@ -10,8 +10,8 @@
 #SBATCH --nodes=1
 #SBATCH --ntasks=1
 #SBATCH --cpus-per-task=8
-#SBATCH --mem=80G
-#SBATCH --time=24:00:00
+#SBATCH --mem=200G
+#SBATCH --time=12:00:00
 #SBATCH --output=logs/slurm-zz-vectorizations-%j.out
 #SBATCH --error=logs/slurm-zz-vectorizations-%j.err
 
@@ -40,7 +40,7 @@ set -euo pipefail
 # --- Configuration -----------------------------------------------------------
 PROJECT_DIR="/u/mdmc/anaflom/projects_mdmc/ZigZagSensorium"
 SCRIPT="${PROJECT_DIR}/scripts/explore_vectorizations.py"
-VENV_DIR="${PROJECT_DIR}/.venv"
+VENV_DIR="${PROJECT_DIR}/.venv-genoa"
 
 DATA_ROOT="${DATA_ROOT:-/orfeo/scratch/area/ygardinazzi/sensorium_2026/derivatives/grid-15x15x10_norm-by_minmax}"
 META_ROOT="${META_ROOT:-/u/mdmc/anaflom/projects_mdmc/sensorium/metadata}"

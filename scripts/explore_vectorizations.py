@@ -33,7 +33,8 @@ from contextlib import redirect_stderr, redirect_stdout
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
-from typing import Dict, List, Optional, Sequence, Set
+from time import perf_counter
+from typing import Dict, List, Optional, Sequence, Set, Tuple
 
 import matplotlib
 
@@ -42,6 +43,7 @@ matplotlib.use("Agg")
 
 import matplotlib.pyplot as plt
 import numpy as np
+from joblib import Parallel, delayed
 from scipy.spatial.distance import pdist, squareform
 from sklearn.decomposition import PCA
 from sklearn.linear_model import LogisticRegression
@@ -102,7 +104,7 @@ class FigureSaver:
     def save(self, fig: plt.Figure, name: str) -> Path:
         safe_name = re.sub(r"[^a-zA-Z0-9_-]+", "_", name.strip()).strip("_")
         out_path = self.figures_dir / f"{self.counter:02d}_{safe_name}.png"
-        fig.savefig(out_path, dpi=180, bbox_inches="tight")
+        fig.savefig(out_path, dpi=300, bbox_inches="tight")
         plt.close(fig)
         self.counter += 1
         return out_path
@@ -251,6 +253,56 @@ def compute_distance_matrices(features: Dict[str, np.ndarray]) -> Dict[str, np.n
     return distance_matrices
 
 
+def _vectorize_single(
+    name: str, vec: object, diagrams: List
+) -> Tuple[str, Optional[np.ndarray], Optional[str], float]:
+    """Apply a single vectorizer to diagrams; return (name, xmat, error, elapsed_time)."""
+    t_vec_start = perf_counter()
+    try:
+        xmat = vec.fit_transform(diagrams)
+        if xmat.ndim == 1:
+            xmat = xmat.reshape(-1, 1)
+        xmat = np.nan_to_num(xmat)
+        elapsed = perf_counter() - t_vec_start
+        return name, xmat, None, elapsed
+    except Exception as exc:
+        elapsed = perf_counter() - t_vec_start
+        return name, None, str(exc), elapsed
+
+
+def _vectorize_single_classification(
+    vname: str, vec: object, diagrams: List, labels: np.ndarray, cv
+) -> Tuple[str, Optional[Dict], Optional[str], float]:
+    """Apply a single vectorizer for cross-validation; return (vname, results_dict, error, elapsed_time)."""
+    t_vec_start = perf_counter()
+    try:
+        xmat = vec.fit_transform(diagrams)
+        if xmat.ndim == 1:
+            xmat = xmat.reshape(-1, 1)
+        xmat = np.nan_to_num(xmat)
+
+        pipe = Pipeline(
+            [
+                ("scaler", StandardScaler()),
+                (
+                    "clf",
+                    LogisticRegression(max_iter=1000, random_state=42),
+                ),
+            ]
+        )
+        scores = cross_val_score(pipe, xmat, labels, cv=cv, scoring="accuracy")
+        result = {
+            "mean_acc": float(scores.mean()),
+            "std_acc": float(scores.std()),
+            "n_features": int(xmat.shape[1]),
+        }
+        elapsed = perf_counter() - t_vec_start
+        return vname, result, None, elapsed
+    except Exception as exc:
+        elapsed = perf_counter() - t_vec_start
+        return vname, None, str(exc), elapsed
+
+
 def run_pipeline(state: RunState, output_dir: Path) -> Dict[str, object]:
     figures_dir = output_dir / "figures"
     logs_dir = output_dir / "logs"
@@ -258,7 +310,8 @@ def run_pipeline(state: RunState, output_dir: Path) -> Dict[str, object]:
     logs_dir.mkdir(parents=True, exist_ok=True)
 
     log_path = logs_dir / "run.log"
-    with open(log_path, "w", encoding="utf-8") as log_fp, redirect_stdout(log_fp), redirect_stderr(log_fp):
+    # Line buffering keeps long Slurm runs observable in near real time.
+    with open(log_path, "w", encoding="utf-8", buffering=1) as log_fp, redirect_stdout(log_fp), redirect_stderr(log_fp):
         print("=" * 90)
         print("Explore Zigzag Vectorizations (CLI)")
         print(f"Timestamp: {datetime.now().isoformat(timespec='seconds')}")
@@ -310,20 +363,39 @@ def run_pipeline(state: RunState, output_dir: Path) -> Dict[str, object]:
         print("\n## 2. Standard + zigzag-specific vectorizations")
         vectorizers = make_vectorizers()
         features: Dict[str, np.ndarray] = {}
-        for name, vec in vectorizers.items():
-            try:
-                xmat = vec.fit_transform(barcodes)
-                if xmat.ndim == 1:
-                    xmat = xmat.reshape(-1, 1)
+        print("Pre-normalising barcodes to DiagramDict ...")
+        t_norm_start = perf_counter()
+        diagrams = [normalize_diagram(b, drop_inf=True) for b in barcodes]
+        print(
+            f"Done - {len(diagrams)} diagrams ready in "
+            f"{perf_counter() - t_norm_start:.1f}s."
+        )
+
+        # Parallel vectorization: n_jobs=-1 uses all available cores.
+        print(f"Vectorizing with {len(vectorizers)} vectorizers using parallel jobs...")
+        t_vec_all_start = perf_counter()
+        results_list = Parallel(n_jobs=-1, verbose=10)(
+            delayed(_vectorize_single)(name, vec, diagrams)
+            for name, vec in vectorizers.items()
+        )
+
+        for name, xmat, error, elapsed in results_list:
+            if error is None:
                 features[name] = xmat
                 n_finite = np.isfinite(xmat).all(axis=1).sum()
                 print(
                     f"  {name:>20s}: shape={str(xmat.shape):>15s}, "
                     f"finite={n_finite}/{len(xmat)}, "
-                    f"range=[{np.nanmin(xmat):.4f}, {np.nanmax(xmat):.4f}]"
+                    f"range=[{np.nanmin(xmat):.4f}, {np.nanmax(xmat):.4f}], "
+                    f"time={elapsed:.1f}s"
                 )
-            except Exception as exc:
-                print(f"  {name:>20s}: FAILED - {exc}")
+            else:
+                print(
+                    f"  {name:>20s}: FAILED after "
+                    f"{elapsed:.1f}s - {error}"
+                )
+
+        print(f"Section 2 completed in {perf_counter() - t_vec_all_start:.1f}s")
 
         artifacts["status"]["2"] = "done"
 
@@ -521,10 +593,6 @@ def run_pipeline(state: RunState, output_dir: Path) -> Dict[str, object]:
             print("\n## 6. Skipped by CLI")
             artifacts["status"]["6"] = "skipped"
 
-        # Free large objects no longer needed after section 6.
-        del features
-        del distance_matrices
-
         # Section 7
         results: Dict[str, Dict[str, float]] = {}
         mouse_2 = state.mouse_2
@@ -552,37 +620,35 @@ def run_pipeline(state: RunState, output_dir: Path) -> Dict[str, object]:
                         f"class 0: {(labels == 0).sum()}, class 1: {(labels == 1).sum()}"
                     )
 
-                    cv = StratifiedKFold(n_splits=5, shuffle=True, random_state=42)
-                    for vname, vec in vectorizers.items():
-                        try:
-                            xmat = vec.fit_transform(all_barcodes)
-                            if xmat.ndim == 1:
-                                xmat = xmat.reshape(-1, 1)
-                            xmat = np.nan_to_num(xmat)
+                    print("Pre-normalising cross-mouse barcodes to DiagramDict ...")
+                    t_xmouse_norm_start = perf_counter()
+                    all_diagrams = [normalize_diagram(b, drop_inf=True) for b in all_barcodes]
+                    print(
+                        f"Done - {len(all_diagrams)} diagrams ready in "
+                        f"{perf_counter() - t_xmouse_norm_start:.1f}s."
+                    )
 
-                            pipe = Pipeline(
-                                [
-                                    ("scaler", StandardScaler()),
-                                    (
-                                        "clf",
-                                        LogisticRegression(max_iter=1000, random_state=42),
-                                    ),
-                                ]
-                            )
-                            scores = cross_val_score(
-                                pipe, xmat, labels, cv=cv, scoring="accuracy"
-                            )
-                            results[vname] = {
-                                "mean_acc": float(scores.mean()),
-                                "std_acc": float(scores.std()),
-                                "n_features": int(xmat.shape[1]),
-                            }
+                    cv = StratifiedKFold(n_splits=5, shuffle=True, random_state=42)
+                    
+                    # Parallel cross-validation: n_jobs=-1 uses all available cores.
+                    print(f"Cross-validating with {len(vectorizers)} vectorizers using parallel jobs...")
+                    t_cv_all_start = perf_counter()
+                    cv_results_list = Parallel(n_jobs=-1, verbose=10)(
+                        delayed(_vectorize_single_classification)(vname, vec, all_diagrams, labels, cv)
+                        for vname, vec in vectorizers.items()
+                    )
+                    
+                    for vname, result, error, elapsed in cv_results_list:
+                        if error is None:
+                            results[vname] = result
                             print(
-                                f"  {vname:>20s}: acc={scores.mean():.3f} +/- {scores.std():.3f} "
-                                f"(n_feat={xmat.shape[1]})"
+                                f"  {vname:>20s}: acc={result['mean_acc']:.3f} +/- {result['std_acc']:.3f} "
+                                f"(n_feat={result['n_features']}, time={elapsed:.1f}s)"
                             )
-                        except Exception as exc:
-                            print(f"  {vname:>20s}: FAILED - {exc}")
+                        else:
+                            print(f"  {vname:>20s}: FAILED after {elapsed:.1f}s - {error}")
+                    
+                    print(f"Section 7 cross-validation completed in {perf_counter() - t_cv_all_start:.1f}s")
 
                     if results:
                         names = list(results.keys())
@@ -627,6 +693,10 @@ def run_pipeline(state: RunState, output_dir: Path) -> Dict[str, object]:
                 # Free cross-mouse data regardless of success/failure.
                 try:
                     del all_barcodes
+                except NameError:
+                    pass
+                try:
+                    del all_diagrams
                 except NameError:
                     pass
                 try:
@@ -915,6 +985,11 @@ def run_pipeline(state: RunState, output_dir: Path) -> Dict[str, object]:
             "mouse_2": mouse_2,
             "clip_frames": clip_frames_used,
         }
+
+        # Free large objects at the end of the run.
+        del diagrams
+        del features
+        del distance_matrices
 
         metrics_path = output_dir / "metrics_summary.json"
         with open(metrics_path, "w", encoding="utf-8") as fp:

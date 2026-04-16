@@ -10,7 +10,7 @@
 #SBATCH --gres=gpu:V100:1
 #SBATCH --cpus-per-task=8
 #SBATCH --mem=120G
-#SBATCH --time=12:00:00
+#SBATCH --time=18:00:00
 #SBATCH --output=logs/slurm-zz-cross-mouse-ablation-%j.out
 #SBATCH --error=logs/slurm-zz-cross-mouse-ablation-%j.err
 
@@ -35,13 +35,13 @@
 #   - metrics summary JSON + CSV
 #
 # Usage examples:
-#   sbatch scripts/classify_trials_cross_mouse.sh
+#   sbatch scripts/classify_trials_cross_mouse_ablation.sh
 #
 #   sbatch --export=METHOD=Turnover,MICE=dynamic29156-11-10-Video-8744edeac3b4d1ce16b680916b5267ce,dynamic29228-2-10-Video-8744edeac3b4d1ce16b680916b5267ce \
-#          scripts/classify_trials_cross_mouse.sh
+#          scripts/classify_trials_cross_mouse_ablation.sh
 #
 #   sbatch --export=METHOD=Turnover,MAX_TRIALS=120,EPOCHS_MLP=20,EPOCHS_CNN1D=20,EPOCHS_CNN3D=12 \
-#          scripts/classify_trials_cross_mouse.sh
+#          scripts/classify_trials_cross_mouse_ablation.sh
 # ============================================================================
 
 set -euo pipefail
@@ -49,7 +49,7 @@ set -euo pipefail
 # --- Configuration -----------------------------------------------------------
 PROJECT_DIR="/u/mdmc/anaflom/projects_mdmc/ZigZagSensorium"
 SCRIPT="${PROJECT_DIR}/scripts/classify_trials_cross_mouse_ablation.py"
-VENV_DIR="${PROJECT_DIR}/.venv-genoa"
+VENV_DIR="${PROJECT_DIR}/.venv-gpu"
 
 DATA_ROOT="${DATA_ROOT:-/orfeo/scratch/area/ygardinazzi/sensorium_2026/derivatives/grid-15x15x10_norm-by_minmax}"
 META_ROOT="${META_ROOT:-/u/mdmc/anaflom/projects_mdmc/sensorium/metadata}"

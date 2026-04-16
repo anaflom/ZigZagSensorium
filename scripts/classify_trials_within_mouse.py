@@ -223,6 +223,8 @@ def run_pipeline(state: RunState) -> Dict[str, object]:
                 mouse_cache_dir.mkdir(parents=True, exist_ok=True)
                 cache_path = mouse_cache_dir / f"{cache_stem}.npz"
 
+                vec_trial_ids = [int(t) for t in trial_ids]
+                use_cache = False
                 if cache_path.exists() and not state.force_recompute:
                     cache = load_vectorization_cache(cache_path)
                     if "features" in cache:
@@ -232,8 +234,37 @@ def run_pipeline(state: RunState) -> Dict[str, object]:
                     else:
                         raise RuntimeError(f"Cache missing feature matrix: {cache_path}")
                     xmat = np.nan_to_num(xmat)
-                    source = "cache"
-                else:
+
+                    cache_trial_ids = None
+                    if "trial_ids" in cache:
+                        cache_trial_ids = [int(t) for t in np.asarray(cache["trial_ids"]).tolist()]
+
+                    if cache_trial_ids is not None:
+                        if len(cache_trial_ids) != int(xmat.shape[0]):
+                            print(
+                                "  Cache mismatch: trial_ids length differs from feature rows; "
+                                "recomputing vectorization."
+                            )
+                        elif cache_trial_ids != vec_trial_ids:
+                            print(
+                                "  Cache mismatch: cached trial_ids differ from current trial_ids; "
+                                "recomputing vectorization."
+                            )
+                        else:
+                            use_cache = True
+                    else:
+                        if int(xmat.shape[0]) != len(vec_trial_ids):
+                            print(
+                                "  Cache mismatch: feature rows differ from current trials and "
+                                "cache has no trial_ids; recomputing vectorization."
+                            )
+                        else:
+                            use_cache = True
+
+                    if use_cache:
+                        source = "cache"
+
+                if not use_cache:
                     vec_out = create_vectorization(
                         barcodes,
                         state.method,

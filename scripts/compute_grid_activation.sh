@@ -38,7 +38,7 @@ set -euo pipefail
 # --- Configuration -----------------------------------------------------------
 PROJECT_DIR="/u/mdmc/anaflom/projects_mdmc/ZigZagSensorium"
 SCRIPT="${PROJECT_DIR}/scripts/compute_grid_activation.py"
-VENV_DIR="${PROJECT_DIR}/.venv"
+VENV_DIR="${PROJECT_DIR}/.venv-genoa"
 
 DATA_ROOT="${DATA_ROOT:-/orfeo/scratch/area/ygardinazzi/sensorium/data/sensorium_all_2023}"
 META_ROOT="${META_ROOT:-/u/mdmc/anaflom/projects_mdmc/sensorium/metadata}"
