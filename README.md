@@ -64,10 +64,10 @@ ZigZagSensorium/
 |---|---|
 | `compute_grid_activation.py` | Bins raw Sensorium neural responses into 3D spatial grids (15×15×10 voxels) per trial. Uses a Fortran kernel (`assign_grid.f90`) for efficient grid assignment. |
 | `compute_zigzag.py` | Computes cubical zigzag persistence on the 3D activation grids for all trials of a given mouse. Designed to be run as a Slurm array job (one task per mouse). |
-| `explore_vectorizations.py` | Headless CLI port of `notebooks/02_explore_vectorizations.ipynb`. Extracts zigzag vectorizations and produces figures (feature matrices, PCA, inter-trial similarity, classification tests). |
+| `explore_vectorizations.py` | Extracts zigzag vectorizations for one mouse and produces figures (feature matrices, PCA, inter-trial similarity, classification tests). |
 | `classify_trials_within_mouse.py` | Within-mouse trial classification using configurable zigzag vectorizations. Trains and evaluates a classifier on trials from a single mouse. |
-| `classify_trials_within_mouse_ablation.py` | Ablation study comparing zigzag vectorization models against a 3D-CNN baseline operating on raw activation grids, within a single mouse. |
-| `classify_trials_cross_mouse_ablation.py` | Leave-one-mouse-out cross-mouse classification. Trains on all eligible mice and evaluates on the held-out mouse; restricts labels to those shared between train and test sets. |
+| `classify_trials_within_mouse_ablation.py` | Within-mouse trial classification using configurable zigzag vectorizations, and ablation study comparing zigzag vectorization models against a 3D-CNN baseline operating on raw activation grids. |
+| `classify_trials_cross_mouse_ablation.py` | Leave-one-mouse-out cross-mouse classification. Trains on all eligible mice and evaluates on the held-out mouse; restricts labels to those shared between train and test sets. Compares zigzag vectorization models against a 3D-CNN baseline operating on raw activation grids. |
 | `utils.py` | Shared utilities for loading zigzag persistence data and computing vectorizations, used by all classification and exploration scripts. |
 
 Shell scripts (`.sh`) are the corresponding Slurm batch submission wrappers for each Python script.
@@ -76,6 +76,6 @@ Shell scripts (`.sh`) are the corresponding Slurm batch submission wrappers for 
 
 ## License
 
-The sofware of this project is licensed under the BSD 3-Clause "New" or "Revised" License.
+The software of this project is licensed under the BSD 3-Clause "New" or "Revised" License.
 
-See LICENSE/ for details.
+See LICENSES/ for details.
