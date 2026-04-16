@@ -10,7 +10,7 @@
 #SBATCH --gres=gpu:V100:1
 #SBATCH --cpus-per-task=8
 #SBATCH --mem=120G
-#SBATCH --time=18:00:00
+#SBATCH --time=12:00:00
 #SBATCH --output=logs/slurm-zz-cross-mouse-ablation-%j.out
 #SBATCH --error=logs/slurm-zz-cross-mouse-ablation-%j.err
 

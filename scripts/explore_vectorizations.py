@@ -751,6 +751,7 @@ def run_pipeline(state: RunState, output_dir: Path) -> Dict[str, object]:
                 stim_vectorizers = make_stim_vectorizers(clip_frames_used)
                 cv_stim = StratifiedKFold(n_splits=5, shuffle=True, random_state=42)
                 scoring = {"acc": "accuracy", "f1": "f1_macro"}
+                n_stim_trials = len(stim_barcodes)
 
                 for vname, vec in stim_vectorizers.items():
                     try:
@@ -849,7 +850,7 @@ def run_pipeline(state: RunState, output_dir: Path) -> Dict[str, object]:
                     ax.set_ylabel("Score")
                     ax.set_title(
                         f"Within-mouse stimulus classification ({n_classes} classes, "
-                        f"{len(stim_barcodes)} trials)\\n"
+                        f"{n_stim_trials} trials)\\n"
                         "blue = standard, orange = zigzag-specific  |  "
                         "solid = accuracy, hatched = macro-F1",
                         fontsize=11,
