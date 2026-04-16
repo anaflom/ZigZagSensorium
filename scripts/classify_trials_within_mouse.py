@@ -1,4 +1,9 @@
 #!/usr/bin/env python3
+
+# SPDX-FileCopyrightText: 2026 Ana Flo <anaflom@gmail.com>
+#
+# SPDX-License-Identifier: BSD-3-Clause
+
 """Within-mouse trial classification using configurable zigzag vectorizations."""
 
 from __future__ import annotations

@@ -1,4 +1,9 @@
 #!/bin/bash
+
+# SPDX-FileCopyrightText: 2026 Ana Flo <anaflom@gmail.com>
+#
+# SPDX-License-Identifier: BSD-3-Clause
+
 #SBATCH --job-name=zz-neural
 #SBATCH --partition=GENOA
 #SBATCH --account=MDMC

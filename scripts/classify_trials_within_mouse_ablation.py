@@ -1,4 +1,9 @@
 #!/usr/bin/env python3
+
+# SPDX-FileCopyrightText: 2026 Ana Flo <anaflom@gmail.com>
+#
+# SPDX-License-Identifier: BSD-3-Clause
+
 """Within-mouse ablation: vectorization models vs 3D-CNN on raw grids."""
 
 from __future__ import annotations

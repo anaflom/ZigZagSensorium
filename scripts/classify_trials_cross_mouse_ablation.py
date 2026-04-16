@@ -1,4 +1,9 @@
 #!/usr/bin/env python3
+
+# SPDX-FileCopyrightText: 2026 Ana Flo <anaflom@gmail.com>
+#
+# SPDX-License-Identifier: BSD-3-Clause
+
 """Cross-mouse leave-one-mouse-out classification.
 
 For each eligible test mouse, trains on all other eligible mice and evaluates

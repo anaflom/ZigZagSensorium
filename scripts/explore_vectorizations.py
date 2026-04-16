@@ -1,4 +1,9 @@
 #!/usr/bin/env python3
+
+# SPDX-FileCopyrightText: 2026 Ana Flo <anaflom@gmail.com>
+#
+# SPDX-License-Identifier: BSD-3-Clause
+
 """Explore zigzag vectorizations from the command line.
 
 This script ports the workflow from notebooks/02_explore_vectorizations.ipynb
