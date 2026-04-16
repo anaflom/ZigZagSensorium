@@ -1,9 +1,18 @@
 #!/usr/bin/env python3
-"""Within-mouse ablation: vectorization models vs 3D-CNN on raw grids."""
+"""Cross-mouse leave-one-mouse-out classification.
+
+For each eligible test mouse, trains on all other eligible mice and evaluates
+on the held-out mouse. Eligibility requires at least two distinct labels after
+metadata filtering and vec/grid trial alignment.
+
+Per fold, the label space is restricted to labels present in both the test
+mouse and the pooled training mice.
+"""
 
 from __future__ import annotations
 
 import argparse
+import copy
 import csv
 import json
 import random
@@ -13,11 +22,10 @@ from contextlib import redirect_stderr, redirect_stdout
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
-from typing import Dict, List, Optional, Sequence, Tuple
+from typing import Any, Dict, List, Optional, Sequence, Tuple
 
 import matplotlib
 
-# Force a non-interactive backend for cluster/headless runs.
 matplotlib.use("Agg")
 
 import matplotlib.pyplot as plt
@@ -27,7 +35,7 @@ import torch.nn as nn
 import torch.nn.functional as F
 from sklearn.linear_model import LogisticRegression
 from sklearn.metrics import ConfusionMatrixDisplay, accuracy_score, confusion_matrix, f1_score
-from sklearn.model_selection import StratifiedKFold
+from sklearn.model_selection import train_test_split
 from sklearn.pipeline import Pipeline
 from sklearn.preprocessing import LabelEncoder, StandardScaler
 from torch.utils.data import DataLoader, Dataset, Subset
@@ -56,7 +64,6 @@ class RunState:
     grid_subdir: str
     cache_dir: Optional[Path]
     force_recompute: bool
-    n_splits: int
     max_trials: Optional[int]
     batch_size_vec: int
     batch_size_grid: int
@@ -128,6 +135,12 @@ def _set_seed(seed: int) -> None:
         torch.cuda.manual_seed_all(seed)
 
 
+def _infer_cnn1d_shape(feat_dim: int, clip_frames: int) -> Tuple[int, int]:
+    if clip_frames > 0 and feat_dim % clip_frames == 0:
+        return int(feat_dim // clip_frames), int(clip_frames)
+    return 1, int(feat_dim)
+
+
 class VectorDataset(Dataset):
     """Simple tensor dataset for vectorized features."""
 
@@ -177,17 +190,13 @@ class GridTrialDataset(Dataset):
         if arr.ndim != 4:
             raise RuntimeError(f"Expected 4D grid array, got shape {arr.shape} in {self.grid_paths[idx]}")
 
-        # Input file convention from compute_grid_activation.py is (Nx, Ny, Nz, T).
-        x = arr.transpose(2, 3, 0, 1).astype(np.float32, copy=False)  # (C=Nz, T, H, W)
-
-        # Clip to the smallest reliable temporal support and zero-pad to fixed clip.
+        x = arr.transpose(2, 3, 0, 1).astype(np.float32, copy=False)
         t_eff = int(min(self.clip_frames, self.valid_frames[idx], x.shape[1]))
         if t_eff <= 0:
             raise RuntimeError(f"Invalid effective clip length={t_eff} for sample {self.grid_paths[idx]}")
 
         out = np.zeros((x.shape[0], self.clip_frames, x.shape[2], x.shape[3]), dtype=np.float32)
         out[:, :t_eff, :, :] = x[:, :t_eff, :, :]
-
         return torch.tensor(out, dtype=torch.float32), int(self.y[idx])
 
 
@@ -303,11 +312,34 @@ def _predict(model: nn.Module, loader: DataLoader, device: torch.device) -> np.n
     return np.concatenate(preds, axis=0)
 
 
-def _run_nn_cv(
+def _build_train_val_indices(y_train: np.ndarray, seed: int) -> Tuple[Optional[np.ndarray], Optional[np.ndarray]]:
+    class_counts = np.bincount(y_train)
+    if len(y_train) < 10 or int(class_counts.min()) < 2:
+        return None, None
+
+    val_size = max(len(class_counts), int(round(0.2 * len(y_train))))
+    if val_size >= len(y_train):
+        return None, None
+
+    all_idx = np.arange(len(y_train))
+    try:
+        train_idx, val_idx = train_test_split(
+            all_idx,
+            test_size=val_size,
+            stratify=y_train,
+            random_state=seed,
+        )
+    except ValueError:
+        return None, None
+    return np.asarray(train_idx), np.asarray(val_idx)
+
+
+def _train_eval_nn(
     make_model,
-    train_dataset_builder,
-    y_int: np.ndarray,
-    splits: Sequence[Tuple[np.ndarray, np.ndarray]],
+    train_ds: Dataset,
+    y_train: np.ndarray,
+    test_ds: Dataset,
+    test_y: np.ndarray,
     *,
     epochs: int,
     lr: float,
@@ -316,13 +348,11 @@ def _run_nn_cv(
     weight_decay: float,
     device: torch.device,
     num_workers: int,
+    seed: int,
 ) -> Tuple[Dict[str, float], np.ndarray]:
-    fold_acc: List[float] = []
-    fold_f1: List[float] = []
-    oof_pred = np.full_like(y_int, fill_value=-1, dtype=np.int64)
+    train_idx, val_idx = _build_train_val_indices(y_train, seed=seed)
 
-    for train_idx, val_idx in splits:
-        train_ds, val_ds = train_dataset_builder(train_idx, val_idx)
+    if train_idx is None or val_idx is None:
         train_loader = DataLoader(
             train_ds,
             batch_size=batch_size,
@@ -330,101 +360,190 @@ def _run_nn_cv(
             num_workers=num_workers,
             pin_memory=(device.type == "cuda"),
         )
+        val_loader = None
+        val_y = None
+    else:
+        train_loader = DataLoader(
+            Subset(train_ds, train_idx),
+            batch_size=batch_size,
+            shuffle=True,
+            num_workers=num_workers,
+            pin_memory=(device.type == "cuda"),
+        )
         val_loader = DataLoader(
-            val_ds,
+            Subset(train_ds, val_idx),
             batch_size=batch_size,
             shuffle=False,
             num_workers=num_workers,
             pin_memory=(device.type == "cuda"),
         )
+        val_y = y_train[val_idx]
 
-        model = make_model().to(device)
-        optimizer = torch.optim.Adam(model.parameters(), lr=lr, weight_decay=weight_decay)
-        scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(optimizer, patience=3, factor=0.5)
-        criterion = nn.CrossEntropyLoss()
+    test_loader = DataLoader(
+        test_ds,
+        batch_size=batch_size,
+        shuffle=False,
+        num_workers=num_workers,
+        pin_memory=(device.type == "cuda"),
+    )
 
-        best_f1 = -1.0
-        best_acc = -1.0
-        best_pred: Optional[np.ndarray] = None
-        wait = 0
+    model = make_model().to(device)
+    optimizer = torch.optim.Adam(model.parameters(), lr=lr, weight_decay=weight_decay)
+    scheduler = (
+        torch.optim.lr_scheduler.ReduceLROnPlateau(optimizer, patience=3, factor=0.5)
+        if val_loader is not None
+        else None
+    )
+    criterion = nn.CrossEntropyLoss()
 
-        for _epoch in range(int(epochs)):
-            _train_epoch(model, train_loader, optimizer, criterion, device)
+    best_state = None
+    best_f1 = -1.0
+    wait = 0
+
+    for _epoch in range(int(epochs)):
+        _train_epoch(model, train_loader, optimizer, criterion, device)
+        if val_loader is not None and val_y is not None:
             val_pred = _predict(model, val_loader, device)
-            val_true = y_int[val_idx]
-            val_acc = float(accuracy_score(val_true, val_pred))
-            val_f1 = float(f1_score(val_true, val_pred, average="macro", zero_division=0))
+            val_f1 = float(f1_score(val_y, val_pred, average="macro", zero_division=0))
             scheduler.step(1.0 - val_f1)
-
             if val_f1 > best_f1:
                 best_f1 = val_f1
-                best_acc = val_acc
-                best_pred = val_pred.copy()
+                best_state = copy.deepcopy(model.state_dict())
                 wait = 0
             else:
                 wait += 1
                 if wait >= int(patience):
                     break
+        else:
+            best_state = copy.deepcopy(model.state_dict())
 
-        if best_pred is None:
-            raise RuntimeError("Training failed to produce predictions")
+    if best_state is not None:
+        model.load_state_dict(best_state)
 
-        oof_pred[val_idx] = best_pred
-        fold_acc.append(best_acc)
-        fold_f1.append(best_f1)
-
-    if np.any(oof_pred < 0):
-        raise RuntimeError("OOF prediction array contains unset indices")
-
+    pred = _predict(model, test_loader, device)
     metrics = {
-        "mean_acc": float(np.mean(fold_acc)),
-        "std_acc": float(np.std(fold_acc)),
-        "mean_f1": float(np.mean(fold_f1)),
-        "std_f1": float(np.std(fold_f1)),
+        "accuracy": float(accuracy_score(test_y, pred)),
+        "macro_f1": float(f1_score(test_y, pred, average="macro", zero_division=0)),
     }
-    return metrics, oof_pred
+    return metrics, pred
 
 
-def _run_logreg_cv(
-    x: np.ndarray,
-    y_int: np.ndarray,
-    splits: Sequence[Tuple[np.ndarray, np.ndarray]],
+def _train_eval_logreg(
+    x_train: np.ndarray,
+    y_train: np.ndarray,
+    x_test: np.ndarray,
+    y_test: np.ndarray,
 ) -> Tuple[Dict[str, float], np.ndarray]:
-    fold_acc: List[float] = []
-    fold_f1: List[float] = []
-    oof_pred = np.full_like(y_int, fill_value=-1, dtype=np.int64)
-
-    for train_idx, val_idx in splits:
-        pipe = Pipeline(
-            [
-                ("scaler", StandardScaler()),
-                (
-                    "clf",
-                    LogisticRegression(
-                        max_iter=2000,
-                        random_state=42,
-                        class_weight="balanced",
-                    ),
-                ),
-            ]
-        )
-        pipe.fit(x[train_idx], y_int[train_idx])
-        pred = pipe.predict(x[val_idx])
-
-        oof_pred[val_idx] = pred
-        fold_acc.append(float(accuracy_score(y_int[val_idx], pred)))
-        fold_f1.append(float(f1_score(y_int[val_idx], pred, average="macro", zero_division=0)))
-
-    if np.any(oof_pred < 0):
-        raise RuntimeError("OOF prediction array contains unset indices")
-
+    pipe = Pipeline(
+        [
+            ("scaler", StandardScaler()),
+            (
+                "clf",
+                LogisticRegression(max_iter=2000, random_state=42, class_weight="balanced"),
+            ),
+        ]
+    )
+    pipe.fit(x_train, y_train)
+    pred = pipe.predict(x_test)
     metrics = {
-        "mean_acc": float(np.mean(fold_acc)),
-        "std_acc": float(np.std(fold_acc)),
-        "mean_f1": float(np.mean(fold_f1)),
-        "std_f1": float(np.std(fold_f1)),
+        "accuracy": float(accuracy_score(y_test, pred)),
+        "macro_f1": float(f1_score(y_test, pred, average="macro", zero_division=0)),
     }
-    return metrics, oof_pred
+    return metrics, pred
+
+
+def _load_mouse_data(state: RunState, mouse_name: str, global_clip: int) -> Optional[Dict[str, Any]]:
+    barcodes, labels, trial_ids, valid_frames = load_labelled_barcodes(
+        state.data_root,
+        state.meta_root,
+        mouse_name,
+        state.zz_folder,
+        max_trials=state.max_trials,
+    )
+    if len(barcodes) == 0:
+        return None
+    if len(np.unique(labels)) < 2:
+        return None
+
+    cache_stem = build_vectorization_cache_stem(
+        mouse_name=mouse_name,
+        method=state.method,
+        p_active=state.p_active,
+        per_trial_thresh=state.per_trial_thresh,
+        clip_frames=global_clip,
+    )
+    mouse_cache_dir = _resolve_mouse_cache_dir(state, mouse_name)
+    mouse_cache_dir.mkdir(parents=True, exist_ok=True)
+    cache_path = mouse_cache_dir / f"{cache_stem}.npz"
+
+    if cache_path.exists() and not state.force_recompute:
+        cache = load_vectorization_cache(cache_path)
+        if "features" in cache:
+            xmat = np.asarray(cache["features"])
+        elif "X" in cache:
+            xmat = np.asarray(cache["X"])
+        else:
+            raise RuntimeError(f"Cache missing feature matrix: {cache_path}")
+        xmat = np.nan_to_num(xmat)
+        vec_source = "cache"
+    else:
+        vec_out = create_vectorization(
+            barcodes,
+            state.method,
+            clip_frames=global_clip,
+            output_folder=mouse_cache_dir,
+            cache_stem=cache_stem,
+            mouse_name=mouse_name,
+            labels=labels,
+            trial_ids=trial_ids,
+            valid_frames=valid_frames,
+        )
+        xmat = np.asarray(vec_out["features"])
+        vec_source = "computed"
+
+    grid_paths, grid_labels, grid_trial_ids, grid_valid_frames = load_labelled_grid_paths(
+        state.data_root,
+        state.meta_root,
+        mouse_name,
+        grid_subdir=state.grid_subdir,
+    )
+    if len(grid_paths) == 0:
+        return None
+
+    vec_tid_to_i = {int(tid): i for i, tid in enumerate(trial_ids)}
+    grid_tid_to_i = {int(tid): i for i, tid in enumerate(grid_trial_ids)}
+    common_trial_ids = [tid for tid in vec_tid_to_i if tid in grid_tid_to_i]
+    if not common_trial_ids:
+        return None
+
+    vec_take = np.array([vec_tid_to_i[tid] for tid in common_trial_ids], dtype=np.int64)
+    grid_take = np.array([grid_tid_to_i[tid] for tid in common_trial_ids], dtype=np.int64)
+
+    x_vec = np.asarray(xmat[vec_take], dtype=np.float64)
+    labels_common = np.asarray(labels[vec_take])
+    grid_paths_common = [grid_paths[i] for i in grid_take]
+    grid_frames_common = np.asarray(grid_valid_frames[grid_take], dtype=np.int64)
+    grid_labels_common = np.asarray(grid_labels[grid_take])
+
+    if not np.all(labels_common == grid_labels_common):
+        raise RuntimeError(f"Label mismatch between vectorization and grid data for {mouse_name}")
+    if len(np.unique(labels_common)) < 2:
+        return None
+
+    first_shape = np.load(grid_paths_common[0], mmap_mode="r").shape
+    in_channels = int(first_shape[2])
+
+    return {
+        "mouse": mouse_name,
+        "x_vec": x_vec,
+        "labels": labels_common,
+        "grid_paths": grid_paths_common,
+        "grid_frames": grid_frames_common,
+        "in_channels": in_channels,
+        "cache_path": str(cache_path),
+        "vec_source": vec_source,
+        "n_trials": int(len(common_trial_ids)),
+    }
 
 
 def run_pipeline(state: RunState) -> Dict[str, object]:
@@ -433,17 +552,15 @@ def run_pipeline(state: RunState) -> Dict[str, object]:
 
     output_folder = state.output_folder
     output_folder.mkdir(parents=True, exist_ok=True)
-
     figures_dir = output_folder / "figures"
     logs_dir = output_folder / "logs"
     figures_dir.mkdir(parents=True, exist_ok=True)
     logs_dir.mkdir(parents=True, exist_ok=True)
-
     log_path = logs_dir / "run.log"
 
     with open(log_path, "w", encoding="utf-8") as log_fp, redirect_stdout(log_fp), redirect_stderr(log_fp):
         print("=" * 90)
-        print("Within-Mouse Ablation: LogReg/MLP/1D-CNN vs 3D-CNN")
+        print("Cross-Mouse LOMO Classification: LogReg/MLP/1D-CNN vs 3D-CNN")
         print(f"Timestamp: {datetime.now().isoformat(timespec='seconds')}")
         print("=" * 90)
 
@@ -459,19 +576,62 @@ def run_pipeline(state: RunState) -> Dict[str, object]:
         print(f"  clip_frames:       {state.clip_frames}")
         print(f"  grid_subdir:       {state.grid_subdir}")
         print(f"  force_recompute:   {state.force_recompute}")
-        print(f"  n_splits:          {state.n_splits}")
         print(f"  max_trials:        {state.max_trials}")
         print(f"  device:            {device}")
 
         discovered_mice = _discover_mice(state.data_root)
         selected_mice = state.mice if state.mice is not None else discovered_mice
         selected_mice = [m for m in selected_mice if m in discovered_mice]
-
         if not selected_mice:
-            raise RuntimeError("No valid mice selected for ablation.")
+            raise RuntimeError("No valid mice selected for cross-mouse classification.")
 
         print(f"\nDiscovered mice: {len(discovered_mice)}")
         print(f"Selected mice: {len(selected_mice)}")
+
+        if state.clip_frames is not None:
+            global_clip = int(state.clip_frames)
+            print(f"\nUsing user clip_frames={global_clip}")
+        else:
+            print("\nPre-scanning valid_frames to determine global clip_frames ...")
+            min_frames_list: List[int] = []
+            for mouse_name in selected_mice:
+                try:
+                    _barcodes, _labels, _trial_ids, valid_frames = load_labelled_barcodes(
+                        state.data_root,
+                        state.meta_root,
+                        mouse_name,
+                        state.zz_folder,
+                        max_trials=state.max_trials,
+                    )
+                    if len(valid_frames) > 0:
+                        min_frames_list.append(int(valid_frames.min()))
+                except Exception as exc:
+                    print(f"  Warning: could not pre-scan {mouse_name}: {exc}")
+            if not min_frames_list:
+                raise RuntimeError("Could not determine global clip_frames from any selected mouse.")
+            global_clip = min(min_frames_list)
+            print(f"  global_clip_frames={global_clip} (min across {len(min_frames_list)} mice)")
+
+        print("\nLoading mouse datasets ...")
+        mouse_data: Dict[str, Dict[str, Any]] = {}
+        for mouse_name in selected_mice:
+            print(f"  {mouse_name} ...", end=" ")
+            try:
+                data = _load_mouse_data(state, mouse_name, global_clip)
+                if data is None:
+                    print("skipped (single label, no grid, or no overlapping trials)")
+                    continue
+                mouse_data[mouse_name] = data
+                print(f"ok (trials={data['n_trials']}, source={data['vec_source']})")
+            except Exception as exc:
+                print(f"FAILED: {exc}")
+                traceback.print_exc()
+
+        eligible_mice = sorted(mouse_data.keys())
+        if len(eligible_mice) < 2:
+            raise RuntimeError(f"Need at least 2 eligible mice for LOMO, got {len(eligible_mice)}")
+
+        print(f"\nEligible mice for LOMO: {len(eligible_mice)}")
 
         model_order = ["logreg", "mlp", "cnn1d", "cnn3d"]
         model_titles = {
@@ -480,134 +640,108 @@ def run_pipeline(state: RunState) -> Dict[str, object]:
             "cnn1d": "1D-CNN (vector)",
             "cnn3d": "3D-CNN (grid)",
         }
+        per_fold: Dict[str, Dict[str, Any]] = {}
+        confusion_payload: Dict[str, Dict[str, Any]] = {}
 
-        per_mouse: Dict[str, Dict[str, object]] = {}
-        confusion_payload: Dict[str, Dict[str, object]] = {}
-
-        for mouse_name in selected_mice:
-            print(f"\n## Mouse: {mouse_name}")
+        for test_mouse in eligible_mice:
+            candidate_train_mice = [m for m in eligible_mice if m != test_mouse]
+            print(f"\n## Test mouse: {test_mouse}")
+            print(f"  Candidate train pool: {len(candidate_train_mice)} mice")
             try:
-                barcodes, labels, trial_ids, valid_frames = load_labelled_barcodes(
-                    state.data_root,
-                    state.meta_root,
-                    mouse_name,
-                    state.zz_folder,
-                    max_trials=state.max_trials,
-                )
-                if len(barcodes) == 0:
-                    print("  No labelled barcodes found; skipping.")
-                    continue
+                test_data = mouse_data[test_mouse]
+                test_label_set = set(np.unique(test_data["labels"]).tolist())
+                train_label_union: set = set()
+                for mouse_name in candidate_train_mice:
+                    train_label_union.update(np.unique(mouse_data[mouse_name]["labels"]).tolist())
 
-                clip_used = state.clip_frames
-                if clip_used is None:
-                    clip_used = int(valid_frames.min())
-
-                cache_stem = build_vectorization_cache_stem(
-                    mouse_name=mouse_name,
-                    method=state.method,
-                    p_active=state.p_active,
-                    per_trial_thresh=state.per_trial_thresh,
-                    clip_frames=clip_used,
-                )
-                mouse_cache_dir = _resolve_mouse_cache_dir(state, mouse_name)
-                mouse_cache_dir.mkdir(parents=True, exist_ok=True)
-                cache_path = mouse_cache_dir / f"{cache_stem}.npz"
-
-                if cache_path.exists() and not state.force_recompute:
-                    cache = load_vectorization_cache(cache_path)
-                    if "features" in cache:
-                        xmat = np.asarray(cache["features"])
-                    elif "X" in cache:
-                        xmat = np.asarray(cache["X"])
-                    else:
-                        raise RuntimeError(f"Cache missing feature matrix: {cache_path}")
-                    xmat = np.nan_to_num(xmat)
-                    vec_source = "cache"
-                else:
-                    vec_out = create_vectorization(
-                        barcodes,
-                        state.method,
-                        clip_frames=clip_used,
-                        output_folder=mouse_cache_dir,
-                        cache_stem=cache_stem,
-                        mouse_name=mouse_name,
-                        labels=labels,
-                        trial_ids=trial_ids,
-                        valid_frames=valid_frames,
-                    )
-                    xmat = np.asarray(vec_out["features"])
-                    vec_source = "computed"
-
-                grid_paths, grid_labels, grid_trial_ids, grid_valid_frames = load_labelled_grid_paths(
-                    state.data_root,
-                    state.meta_root,
-                    mouse_name,
-                    grid_subdir=state.grid_subdir,
-                )
-                if len(grid_paths) == 0:
-                    print(f"  No grid files found in {state.grid_subdir}; skipping mouse.")
-                    continue
-
-                vec_trial_ids = [int(t) for t in trial_ids]
-                vec_idx = {tid: i for i, tid in enumerate(vec_trial_ids)}
-                grid_idx = {int(tid): i for i, tid in enumerate(grid_trial_ids)}
-
-                common_trial_ids = [tid for tid in vec_trial_ids if tid in grid_idx]
-                if len(common_trial_ids) == 0:
-                    print("  No overlapping trial ids between vectorization and grid data; skipping mouse.")
-                    continue
-
-                vec_take = np.array([vec_idx[tid] for tid in common_trial_ids], dtype=np.int64)
-                grid_take = np.array([grid_idx[tid] for tid in common_trial_ids], dtype=np.int64)
-
-                x_common = np.asarray(xmat[vec_take], dtype=np.float64)
-                labels_common = np.asarray(labels[vec_take])
-                grid_paths_common = [grid_paths[i] for i in grid_take]
-                grid_frames_common = np.asarray(grid_valid_frames[grid_take], dtype=np.int64)
-
-                grid_labels_common = np.asarray(grid_labels[grid_take])
-                if not np.all(labels_common == grid_labels_common):
-                    raise RuntimeError("Label mismatch between vectorization and grid trial alignment")
-
-                le = LabelEncoder().fit(labels_common)
-                y_int = le.transform(labels_common)
-                class_labels = list(le.classes_)
-                class_counts = np.bincount(y_int, minlength=len(class_labels))
-                min_count = int(class_counts.min())
-                folds = min(int(state.n_splits), min_count)
-                if len(class_labels) < 2:
-                    print("  Skipping mouse: only one class after trial intersection.")
-                    continue
-                if folds < 2:
+                shared_labels = sorted(test_label_set & train_label_union)
+                if len(shared_labels) < 2:
                     print(
-                        f"  Skipping mouse: not enough samples per class for CV "
-                        f"(min_count={min_count}, requested={state.n_splits})."
+                        f"  Skipped: fewer than 2 shared labels "
+                        f"(test={sorted(test_label_set)}, train={sorted(train_label_union)})"
                     )
                     continue
 
-                cv = StratifiedKFold(n_splits=folds, shuffle=True, random_state=state.seed)
-                splits = list(cv.split(np.zeros(len(y_int)), y_int))
+                encoder = LabelEncoder().fit(shared_labels)
 
-                model_results: Dict[str, Dict[str, float]] = {}
-                model_preds: Dict[str, np.ndarray] = {}
+                test_mask = np.isin(test_data["labels"], shared_labels)
+                if not np.any(test_mask):
+                    print("  Skipped: no test samples after shared-label filtering")
+                    continue
 
-                # LogReg
-                logreg_metrics, logreg_pred = _run_logreg_cv(x_common, y_int, splits)
-                model_results["logreg"] = logreg_metrics
-                model_preds["logreg"] = logreg_pred
+                test_x_vec = np.asarray(test_data["x_vec"][test_mask], dtype=np.float64)
+                test_labels = np.asarray(test_data["labels"][test_mask])
+                test_y = encoder.transform(test_labels)
+                test_grid_paths = [test_data["grid_paths"][i] for i in np.where(test_mask)[0]]
+                test_grid_frames = np.asarray(test_data["grid_frames"][test_mask], dtype=np.int64)
 
-                # MLP
-                def build_mlp_dataset(train_idx: np.ndarray, val_idx: np.ndarray):
-                    scaler = StandardScaler().fit(x_common[train_idx])
-                    x_tr = scaler.transform(x_common[train_idx])
-                    x_va = scaler.transform(x_common[val_idx])
-                    return VectorDataset(x_tr, y_int[train_idx]), VectorDataset(x_va, y_int[val_idx])
+                active_train_mice: List[str] = []
+                train_x_parts: List[np.ndarray] = []
+                train_y_parts: List[np.ndarray] = []
+                train_grid_paths: List[Path] = []
+                train_grid_frames_list: List[int] = []
+                vec_sources_by_mouse: Dict[str, str] = {}
+                cache_paths_by_mouse: Dict[str, str] = {test_mouse: test_data["cache_path"]}
+                vec_sources_by_mouse[test_mouse] = test_data["vec_source"]
 
-                mlp_metrics, mlp_pred = _run_nn_cv(
-                    make_model=lambda: MLP(n_classes=len(class_labels), input_dim=x_common.shape[1]),
-                    train_dataset_builder=build_mlp_dataset,
-                    y_int=y_int,
-                    splits=splits,
+                for mouse_name in candidate_train_mice:
+                    train_data = mouse_data[mouse_name]
+                    mask = np.isin(train_data["labels"], shared_labels)
+                    if not np.any(mask):
+                        continue
+                    active_train_mice.append(mouse_name)
+                    train_x_parts.append(np.asarray(train_data["x_vec"][mask], dtype=np.float64))
+                    train_y_parts.append(encoder.transform(np.asarray(train_data["labels"][mask])))
+                    idxs = np.where(mask)[0]
+                    train_grid_paths.extend([train_data["grid_paths"][i] for i in idxs])
+                    train_grid_frames_list.extend(np.asarray(train_data["grid_frames"][mask], dtype=np.int64).tolist())
+                    vec_sources_by_mouse[mouse_name] = train_data["vec_source"]
+                    cache_paths_by_mouse[mouse_name] = train_data["cache_path"]
+
+                if not train_x_parts:
+                    print("  Skipped: no training samples after shared-label filtering")
+                    continue
+
+                train_x_vec = np.concatenate(train_x_parts, axis=0)
+                train_y = np.concatenate(train_y_parts, axis=0)
+                train_grid_frames = np.asarray(train_grid_frames_list, dtype=np.int64)
+                if len(np.unique(train_y)) < 2 or len(np.unique(test_y)) < 2:
+                    print("  Skipped: train/test data collapsed to a single class after shared-label filtering")
+                    continue
+
+                scaler = StandardScaler().fit(train_x_vec)
+                x_train_scaled = scaler.transform(train_x_vec)
+                x_test_scaled = scaler.transform(test_x_vec)
+                cnn1d_channels, cnn1d_seq_len = _infer_cnn1d_shape(train_x_vec.shape[1], global_clip)
+                vec_source_summary = (
+                    next(iter(set(vec_sources_by_mouse.values())))
+                    if len(set(vec_sources_by_mouse.values())) == 1
+                    else "mixed"
+                )
+                cache_path_summary = (
+                    next(iter(set(cache_paths_by_mouse.values())))
+                    if len(set(cache_paths_by_mouse.values())) == 1
+                    else "multiple"
+                )
+
+                print(
+                    f"  Shared labels={shared_labels}, train_trials={len(train_y)}, "
+                    f"test_trials={len(test_y)}, train_mice={len(active_train_mice)}"
+                )
+
+                logreg_metrics, logreg_pred = _train_eval_logreg(
+                    x_train_scaled,
+                    train_y,
+                    x_test_scaled,
+                    test_y,
+                )
+
+                mlp_metrics, mlp_pred = _train_eval_nn(
+                    make_model=lambda: MLP(n_classes=len(shared_labels), input_dim=train_x_vec.shape[1]),
+                    train_ds=VectorDataset(x_train_scaled, train_y),
+                    y_train=train_y,
+                    test_ds=VectorDataset(x_test_scaled, test_y),
+                    test_y=test_y,
                     epochs=state.epochs_mlp,
                     lr=state.lr_vec,
                     batch_size=state.batch_size_vec,
@@ -615,37 +749,19 @@ def run_pipeline(state: RunState) -> Dict[str, object]:
                     weight_decay=state.weight_decay,
                     device=device,
                     num_workers=state.num_workers_dl,
+                    seed=state.seed,
                 )
-                model_results["mlp"] = mlp_metrics
-                model_preds["mlp"] = mlp_pred
 
-                # 1D-CNN
-                if clip_used > 0 and x_common.shape[1] % int(clip_used) == 0:
-                    cnn1d_channels = int(x_common.shape[1] // int(clip_used))
-                    cnn1d_seq_len = int(clip_used)
-                else:
-                    cnn1d_channels = 1
-                    cnn1d_seq_len = int(x_common.shape[1])
-                    print(
-                        "  Warning: feature length is not divisible by clip_frames; "
-                        "1D-CNN uses a single channel over full feature length."
-                    )
-
-                def build_cnn1d_dataset(train_idx: np.ndarray, val_idx: np.ndarray):
-                    scaler = StandardScaler().fit(x_common[train_idx])
-                    x_tr = scaler.transform(x_common[train_idx])
-                    x_va = scaler.transform(x_common[val_idx])
-                    return VectorDataset(x_tr, y_int[train_idx]), VectorDataset(x_va, y_int[val_idx])
-
-                cnn1d_metrics, cnn1d_pred = _run_nn_cv(
+                cnn1d_metrics, cnn1d_pred = _train_eval_nn(
                     make_model=lambda: CNN1D(
-                        n_classes=len(class_labels),
+                        n_classes=len(shared_labels),
                         in_channels=cnn1d_channels,
                         seq_len=cnn1d_seq_len,
                     ),
-                    train_dataset_builder=build_cnn1d_dataset,
-                    y_int=y_int,
-                    splits=splits,
+                    train_ds=VectorDataset(x_train_scaled, train_y),
+                    y_train=train_y,
+                    test_ds=VectorDataset(x_test_scaled, test_y),
+                    test_y=test_y,
                     epochs=state.epochs_cnn1d,
                     lr=state.lr_vec,
                     batch_size=state.batch_size_vec,
@@ -653,29 +769,30 @@ def run_pipeline(state: RunState) -> Dict[str, object]:
                     weight_decay=state.weight_decay,
                     device=device,
                     num_workers=state.num_workers_dl,
-                )
-                model_results["cnn1d"] = cnn1d_metrics
-                model_preds["cnn1d"] = cnn1d_pred
-
-                # 3D-CNN
-                grid_dataset = GridTrialDataset(
-                    grid_paths=grid_paths_common,
-                    y=y_int,
-                    valid_frames=grid_frames_common,
-                    clip_frames=int(clip_used),
+                    seed=state.seed,
                 )
 
-                def build_grid_dataset(train_idx: np.ndarray, val_idx: np.ndarray):
-                    return Subset(grid_dataset, train_idx), Subset(grid_dataset, val_idx)
-
-                cnn3d_metrics, cnn3d_pred = _run_nn_cv(
+                train_grid_ds = GridTrialDataset(
+                    grid_paths=train_grid_paths,
+                    y=train_y,
+                    valid_frames=train_grid_frames,
+                    clip_frames=global_clip,
+                )
+                test_grid_ds = GridTrialDataset(
+                    grid_paths=test_grid_paths,
+                    y=test_y,
+                    valid_frames=test_grid_frames,
+                    clip_frames=global_clip,
+                )
+                cnn3d_metrics, cnn3d_pred = _train_eval_nn(
                     make_model=lambda: CNN3D(
-                        n_classes=len(class_labels),
-                        in_channels=grid_dataset.in_channels,
+                        n_classes=len(shared_labels),
+                        in_channels=test_data["in_channels"],
                     ),
-                    train_dataset_builder=build_grid_dataset,
-                    y_int=y_int,
-                    splits=splits,
+                    train_ds=train_grid_ds,
+                    y_train=train_y,
+                    test_ds=test_grid_ds,
+                    test_y=test_y,
                     epochs=state.epochs_cnn3d,
                     lr=state.lr_cnn3d,
                     batch_size=state.batch_size_grid,
@@ -683,61 +800,68 @@ def run_pipeline(state: RunState) -> Dict[str, object]:
                     weight_decay=state.weight_decay,
                     device=device,
                     num_workers=state.num_workers_dl,
+                    seed=state.seed,
                 )
-                model_results["cnn3d"] = cnn3d_metrics
-                model_preds["cnn3d"] = cnn3d_pred
 
-                best_model = max(model_order, key=lambda m: model_results[m]["mean_f1"])
+                model_metrics = {
+                    "logreg": logreg_metrics,
+                    "mlp": mlp_metrics,
+                    "cnn1d": cnn1d_metrics,
+                    "cnn3d": cnn3d_metrics,
+                }
+                model_preds = {
+                    "logreg": logreg_pred,
+                    "mlp": mlp_pred,
+                    "cnn1d": cnn1d_pred,
+                    "cnn3d": cnn3d_pred,
+                }
+                best_model = max(model_order, key=lambda mk: model_metrics[mk]["macro_f1"])
 
-                per_mouse[mouse_name] = {
-                    "n_trials": int(len(y_int)),
-                    "n_features": int(x_common.shape[1]),
-                    "clip_frames": int(clip_used),
-                    "cv_folds": int(folds),
-                    "class_labels": class_labels,
-                    "class_counts": {
-                        class_labels[i]: int(class_counts[i]) for i in range(len(class_labels))
-                    },
-                    "source": vec_source,
-                    "cache_path": str(cache_path),
-                    "best_model": best_model,
+                per_fold[test_mouse] = {
+                    "test_mouse": test_mouse,
+                    "train_mice": active_train_mice,
+                    "n_train_mice": len(active_train_mice),
+                    "n_train_trials": int(len(train_y)),
+                    "n_test_trials": int(len(test_y)),
+                    "n_features": int(train_x_vec.shape[1]),
+                    "clip_frames": int(global_clip),
+                    "shared_labels": shared_labels,
+                    "n_classes": int(len(shared_labels)),
                     "cnn1d_channels": int(cnn1d_channels),
                     "cnn1d_seq_len": int(cnn1d_seq_len),
-                    "models": model_results,
+                    "best_model": best_model,
+                    "vec_source": vec_source_summary,
+                    "cache_path": cache_path_summary,
+                    "cache_paths_by_mouse": cache_paths_by_mouse,
+                    "vec_sources_by_mouse": vec_sources_by_mouse,
+                    "models": model_metrics,
                 }
-                model_cms: Dict[str, np.ndarray] = {}
-                for mk in model_order:
-                    mk_cm = confusion_matrix(y_int, model_preds[mk], labels=np.arange(len(class_labels)))
-                    model_cms[mk] = mk_cm
-                confusion_payload[mouse_name] = {
-                    "labels": class_labels,
+                model_cms: Dict[str, np.ndarray] = {
+                    mk: confusion_matrix(test_y, model_preds[mk], labels=np.arange(len(shared_labels)))
+                    for mk in model_order
+                }
+                confusion_payload[test_mouse] = {
+                    "labels": shared_labels,
                     "cms": model_cms,
                     "best_model": best_model,
                 }
 
-                print(
-                    f"  source={vec_source}, trials={len(y_int)}, feat={x_common.shape[1]}, folds={folds}, "
-                    f"best={best_model}:{model_results[best_model]['mean_f1']:.3f}"
-                )
                 for mk in model_order:
-                    mr = model_results[mk]
-                    print(
-                        f"    {mk:6s} acc={mr['mean_acc']:.3f}+/-{mr['std_acc']:.3f} "
-                        f"f1={mr['mean_f1']:.3f}+/-{mr['std_f1']:.3f}"
-                    )
+                    mm = model_metrics[mk]
+                    print(f"    {mk:6s} acc={mm['accuracy']:.3f} f1={mm['macro_f1']:.3f}")
+                print(f"  best={best_model}:{model_metrics[best_model]['macro_f1']:.3f}")
             except Exception as exc:
                 print(f"  FAILED: {exc}")
                 traceback.print_exc()
 
-        if not per_mouse:
-            raise RuntimeError("No mouse produced ablation results.")
+        if not per_fold:
+            raise RuntimeError("No LOMO fold produced results.")
 
-        mice_order = sorted(per_mouse.keys())
+        fold_order = sorted(per_fold.keys())
 
-        # Figure 1: Macro-F1 grouped bars by model per mouse.
-        x = np.arange(len(mice_order))
+        fig, ax = plt.subplots(figsize=(max(9, len(fold_order) * 1.3), 5.0))
+        x = np.arange(len(fold_order))
         width = 0.18
-        fig, ax = plt.subplots(figsize=(max(9, len(mice_order) * 1.3), 5.0))
         offsets = {
             "logreg": -1.5 * width,
             "mlp": -0.5 * width,
@@ -751,64 +875,51 @@ def run_pipeline(state: RunState) -> Dict[str, object]:
             "cnn3d": "#DD8452",
         }
         for mk in model_order:
-            vals = [float(per_mouse[m]["models"][mk]["mean_f1"]) for m in mice_order]
-            errs = [float(per_mouse[m]["models"][mk]["std_f1"]) for m in mice_order]
-            ax.bar(
-                x + offsets[mk],
-                vals,
-                width,
-                yerr=errs,
-                capsize=3,
-                label=model_titles[mk],
-                alpha=0.85,
-                color=colors[mk],
-            )
-
+            vals = [float(per_fold[m]["models"][mk]["macro_f1"]) for m in fold_order]
+            ax.bar(x + offsets[mk], vals, width, label=model_titles[mk], alpha=0.85, color=colors[mk])
         ax.set_xticks(x)
-        ax.set_xticklabels(mice_order, rotation=30, ha="right", fontsize=8)
+        ax.set_xticklabels(fold_order, rotation=30, ha="right", fontsize=8)
         ax.set_ylim(0, 1.05)
         ax.set_ylabel("Macro-F1")
-        ax.set_title(f"Within-mouse ablation by mouse ({state.method})")
+        ax.set_title(f"Cross-mouse LOMO macro-F1 by test mouse ({state.method})")
         ax.grid(axis="y", alpha=0.25)
         ax.legend(loc="upper right", ncol=2, fontsize=8)
         fig.tight_layout()
-        fig1 = figures_dir / "01_ablation_macro_f1_by_mouse.png"
+        fig1 = figures_dir / "01_lomo_macro_f1_by_test_mouse.png"
         fig.savefig(fig1, dpi=300, bbox_inches="tight")
         plt.close(fig)
         print(f"Saved figure: {fig1}")
 
-        # Figure 2: Mean performance across mice.
         fig, axes = plt.subplots(1, 2, figsize=(10, 4.6))
-        mean_acc = [np.mean([per_mouse[m]["models"][mk]["mean_acc"] for m in mice_order]) for mk in model_order]
-        mean_f1 = [np.mean([per_mouse[m]["models"][mk]["mean_f1"] for m in mice_order]) for mk in model_order]
-        std_acc = [np.std([per_mouse[m]["models"][mk]["mean_acc"] for m in mice_order]) for mk in model_order]
-        std_f1 = [np.std([per_mouse[m]["models"][mk]["mean_f1"] for m in mice_order]) for mk in model_order]
-
-        axes[0].bar(np.arange(len(model_order)), mean_acc, yerr=std_acc, capsize=4, color=[colors[m] for m in model_order], alpha=0.85)
-        axes[0].set_xticks(np.arange(len(model_order)))
+        mean_acc = [np.mean([per_fold[m]["models"][mk]["accuracy"] for m in fold_order]) for mk in model_order]
+        mean_f1 = [np.mean([per_fold[m]["models"][mk]["macro_f1"] for m in fold_order]) for mk in model_order]
+        std_acc = [np.std([per_fold[m]["models"][mk]["accuracy"] for m in fold_order]) for mk in model_order]
+        std_f1 = [np.std([per_fold[m]["models"][mk]["macro_f1"] for m in fold_order]) for mk in model_order]
+        xi = np.arange(len(model_order))
+        color_list = [colors[m] for m in model_order]
+        axes[0].bar(xi, mean_acc, yerr=std_acc, capsize=4, color=color_list, alpha=0.85)
+        axes[0].set_xticks(xi)
         axes[0].set_xticklabels([model_titles[m] for m in model_order], rotation=25, ha="right", fontsize=8)
         axes[0].set_ylim(0, 1.05)
         axes[0].set_ylabel("Accuracy")
-        axes[0].set_title("Mean accuracy across mice")
+        axes[0].set_title("Mean accuracy across test mice")
         axes[0].grid(axis="y", alpha=0.25)
-
-        axes[1].bar(np.arange(len(model_order)), mean_f1, yerr=std_f1, capsize=4, color=[colors[m] for m in model_order], alpha=0.85)
-        axes[1].set_xticks(np.arange(len(model_order)))
+        axes[1].bar(xi, mean_f1, yerr=std_f1, capsize=4, color=color_list, alpha=0.85)
+        axes[1].set_xticks(xi)
         axes[1].set_xticklabels([model_titles[m] for m in model_order], rotation=25, ha="right", fontsize=8)
         axes[1].set_ylim(0, 1.05)
         axes[1].set_ylabel("Macro-F1")
-        axes[1].set_title("Mean macro-F1 across mice")
+        axes[1].set_title("Mean macro-F1 across test mice")
         axes[1].grid(axis="y", alpha=0.25)
-
         fig.tight_layout()
-        fig2 = figures_dir / "02_ablation_mean_scores.png"
+        fig2 = figures_dir / "02_lomo_mean_scores.png"
         fig.savefig(fig2, dpi=300, bbox_inches="tight")
         plt.close(fig)
         print(f"Saved figure: {fig2}")
 
-        # Figure 3: Confusion matrices for all 4 classifiers per mouse.
-        # Layout: rows = mice, columns = 4 models.
-        n_mice = len(mice_order)
+        # Figure 3: Confusion matrices for all 4 classifiers per test mouse.
+        # Layout: rows = test mice, columns = 4 models.
+        n_mice = len(fold_order)
         n_models = len(model_order)
         fig, axes = plt.subplots(
             n_mice,
@@ -816,16 +927,15 @@ def run_pipeline(state: RunState) -> Dict[str, object]:
             figsize=(4.4 * n_models, 3.8 * n_mice),
             squeeze=False,
         )
-
-        for row_idx, mouse_name in enumerate(mice_order):
+        for row_idx, mouse_name in enumerate(fold_order):
             payload = confusion_payload[mouse_name]
             labels_order = payload["labels"]
             best_model = payload["best_model"]
             for col_idx, mk in enumerate(model_order):
                 ax = axes[row_idx][col_idx]
-                cm = np.asarray(payload["cms"][mk], dtype=float)
-                row_sums = cm.sum(axis=1, keepdims=True)
-                cm_norm = np.divide(cm, row_sums, out=np.zeros_like(cm), where=row_sums != 0)
+                cm_arr = np.asarray(payload["cms"][mk], dtype=float)
+                row_sums = cm_arr.sum(axis=1, keepdims=True)
+                cm_norm = np.divide(cm_arr, row_sums, out=np.zeros_like(cm_arr), where=row_sums != 0)
                 ConfusionMatrixDisplay(cm_norm, display_labels=labels_order).plot(
                     ax=ax,
                     cmap="Blues",
@@ -836,26 +946,26 @@ def run_pipeline(state: RunState) -> Dict[str, object]:
                 if mk == best_model:
                     title += " ★"
                 ax.set_title(title, fontsize=7)
-
-        fig.suptitle("Normalized confusion matrices — all classifiers per mouse (★ = best)", fontsize=11)
+        fig.suptitle("Normalized confusion matrices — all classifiers per test mouse (★ = best)", fontsize=11)
         fig.tight_layout()
         fig3 = figures_dir / "03_all_classifier_confusion_matrices.png"
         fig.savefig(fig3, dpi=300, bbox_inches="tight")
         plt.close(fig)
         print(f"Saved figure: {fig3}")
 
-        summary_json_path = output_folder / "within_mouse_ablation_metrics.json"
-        summary_csv_path = output_folder / "within_mouse_ablation_metrics.csv"
-
+        summary_json_path = output_folder / "cross_mouse_metrics.json"
+        summary_csv_path = output_folder / "cross_mouse_metrics.csv"
         payload = {
             "method": state.method,
             "p_active": state.p_active,
             "per_trial_thresh": state.per_trial_thresh,
             "zz_folder": state.zz_folder,
             "grid_subdir": state.grid_subdir,
-            "mice": mice_order,
-            "results": per_mouse,
+            "global_clip_frames": int(global_clip),
+            "eligible_mice": eligible_mice,
+            "n_lomo_folds": len(fold_order),
             "models": model_order,
+            "results": per_fold,
             "figures": [str(fig1), str(fig2), str(fig3)],
             "log_path": str(log_path),
             "cache_dir": (
@@ -873,42 +983,48 @@ def run_pipeline(state: RunState) -> Dict[str, object]:
             writer = csv.writer(fp)
             writer.writerow(
                 [
-                    "mouse",
+                    "test_mouse",
+                    "train_mice",
+                    "n_train_mice",
                     "method",
                     "model",
                     "input",
-                    "n_trials",
+                    "n_train_trials",
+                    "n_test_trials",
                     "n_features",
                     "clip_frames",
-                    "cv_folds",
-                    "mean_acc",
-                    "std_acc",
-                    "mean_f1",
-                    "std_f1",
-                    "source",
+                    "n_classes",
+                    "shared_labels",
+                    "accuracy",
+                    "macro_f1",
+                    "vec_source",
                     "cache_path",
                     "best_model",
                 ]
             )
-            for mouse_name in mice_order:
-                row = per_mouse[mouse_name]
-                for mk in model_order:
-                    mr = row["models"][mk]
+            for mouse_name in fold_order:
+                row = per_fold[mouse_name]
+                train_mice_str = "|".join(row["train_mice"])
+                shared_label_str = "|".join(row["shared_labels"])
+                for model_name in model_order:
+                    model_metrics = row["models"][model_name]
                     writer.writerow(
                         [
-                            mouse_name,
+                            row["test_mouse"],
+                            train_mice_str,
+                            row["n_train_mice"],
                             state.method,
-                            mk,
-                            "grid" if mk == "cnn3d" else "vector",
-                            row["n_trials"],
+                            model_name,
+                            "grid" if model_name == "cnn3d" else "vector",
+                            row["n_train_trials"],
+                            row["n_test_trials"],
                             row["n_features"],
                             row["clip_frames"],
-                            row["cv_folds"],
-                            mr["mean_acc"],
-                            mr["std_acc"],
-                            mr["mean_f1"],
-                            mr["std_f1"],
-                            row["source"],
+                            row["n_classes"],
+                            shared_label_str,
+                            model_metrics["accuracy"],
+                            model_metrics["macro_f1"],
+                            row["vec_source"],
                             row["cache_path"],
                             row["best_model"],
                         ]
@@ -930,8 +1046,8 @@ def run_pipeline(state: RunState) -> Dict[str, object]:
 def build_arg_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         description=(
-            "Within-mouse ablation using selected zigzag vectorization (LogReg/MLP/1D-CNN) "
-            "and 3D-CNN on raw grid activity."
+            "Cross-mouse leave-one-mouse-out classification using selected zigzag vectorization "
+            "(LogReg/MLP/1D-CNN) and 3D-CNN on raw grids."
         )
     )
     parser.add_argument("--output-folder", required=True, type=Path)
@@ -951,7 +1067,6 @@ def build_arg_parser() -> argparse.ArgumentParser:
         help="Directory for .npz vectorization caches. Default: <data-root>/<mouse>/cache",
     )
     parser.add_argument("--force-recompute", action="store_true")
-    parser.add_argument("--n-splits", default=5, type=int)
     parser.add_argument("--max-trials", default=None, type=_opt_int)
 
     parser.add_argument("--batch-size-vec", default=64, type=int)
@@ -989,7 +1104,6 @@ def main() -> int:
         grid_subdir=args.grid_subdir,
         cache_dir=args.cache_dir,
         force_recompute=args.force_recompute,
-        n_splits=args.n_splits,
         max_trials=args.max_trials,
         batch_size_vec=args.batch_size_vec,
         batch_size_grid=args.batch_size_grid,
