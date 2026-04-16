@@ -49,13 +49,14 @@ META_ROOT="${META_ROOT:-/u/mdmc/anaflom/projects_mdmc/sensorium/metadata}"
 
 # Vectorization parameters
 P_ACTIVE="${P_ACTIVE:-30}"
-PER_TRIAL_THRESH="${PER_TRIAL_THRESH:-false}"
+PER_TRIAL_THRESH="${PER_TRIAL_THRESH:-true}"
 METHOD="${METHOD:-Turnover}"
 CLIP_FRAMES="${CLIP_FRAMES:-None}"
 
 # Classification parameters
 N_SPLITS="${N_SPLITS:-5}"
 MAX_TRIALS="${MAX_TRIALS:-None}"
+MICE="${MICE:-None}"
 
 # Normalize boolean string for output folder naming
 PER_TRIAL_THRESH_NORM="$(echo "${PER_TRIAL_THRESH}" | tr '[:upper:]' '[:lower:]')"
@@ -108,6 +109,7 @@ echo "PER_TRIAL_THRESH: ${PER_TRIAL_THRESH}"
 echo "CLIP_FRAMES: ${CLIP_FRAMES}"
 echo "N_SPLITS (CV folds): ${N_SPLITS}"
 echo "MAX_TRIALS: ${MAX_TRIALS}"
+echo "MICE: ${MICE}"
 echo "============================================"
 
 # --- Build command -----------------------------------------------------------
@@ -134,6 +136,10 @@ fi
 
 if [[ "${MAX_TRIALS}" != "None" && "${MAX_TRIALS}" != "none" && "${MAX_TRIALS}" != "" ]]; then
   CMD+=(--max-trials "${MAX_TRIALS}")
+fi
+
+if [[ "${MICE}" != "None" && "${MICE}" != "none" && "${MICE}" != "" ]]; then
+  CMD+=(--mice "${MICE}")
 fi
 
 echo ""

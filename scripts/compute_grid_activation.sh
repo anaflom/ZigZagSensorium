@@ -37,7 +37,7 @@ VENV_DIR="${PROJECT_DIR}/.venv"
 
 DATA_ROOT="${DATA_ROOT:-/orfeo/scratch/area/ygardinazzi/sensorium/data/sensorium_all_2023}"
 META_ROOT="${META_ROOT:-/u/mdmc/anaflom/projects_mdmc/sensorium/metadata}"
-ROOT_OUTPUT="${ROOT_OUTPUT:-/orfeo/scratch/area/ygardinazzi/sensorium_2026/derivatives/grid-15x15x10_norm-by_minmax_verification}"
+ROOT_OUTPUT="${ROOT_OUTPUT:-/orfeo/scratch/area/ygardinazzi/sensorium_2026/derivatives/grid-15x15x10_norm-by_minmax}"
 
 # Optional controls
 MICE="${MICE:-}"

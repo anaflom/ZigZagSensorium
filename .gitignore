@@ -3,6 +3,8 @@ __pycache__/
 
 # Virtual environment
 .venv/
+.venv-gpu/
+.venv-genoa/
 venv/
 env/
 

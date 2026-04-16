@@ -1,2 +1,0 @@
-mouse,method,n_trials,n_features,clip_frames,cv_folds,mean_acc,std_acc,mean_f1,std_f1,source,cache_path
-dynamic29156-11-10-Video-8744edeac3b4d1ce16b680916b5267ce,Turnover,80,720,240,3,0.7630579297245964,0.04371050891876565,0.4796459305445185,0.09179467638199977,computed,/orfeo/scratch/area/ygardinazzi/sensorium_2026/derivatives/grid-15x15x10_norm-by_minmax/__chache/dynamic29156-11-10-Video-8744edeac3b4d1ce16b680916b5267ce_Turnover_p30_pertrial1_clip240.npz

@@ -12,7 +12,6 @@ from __future__ import annotations
 import argparse
 import importlib.util
 import json
-import re
 import subprocess
 import sys
 from dataclasses import dataclass
@@ -23,7 +22,14 @@ from typing import Dict, Iterable, List, Optional, Sequence, Tuple
 import numpy as np
 import pandas as pd
 
-from utils import load_trial_metadata
+from utils import (
+    load_trial_metadata,
+    _discover_mice,
+    _to_bool_series,
+    _eligible_trials,
+    _extract_trial_id_from_name,
+    _resolve_trial_response_file,
+)
 
 
 @dataclass
@@ -52,59 +58,12 @@ def _opt_csv_list(value: str) -> Optional[List[str]]:
     return items if items else None
 
 
-def _discover_mice(data_root: Path) -> List[str]:
-    return sorted(
-        [d.name for d in data_root.iterdir() if d.is_dir() and d.name.startswith("dynamic")]
-    )
-
-
 def _normalization_token(normalization: Optional[str]) -> str:
     if normalization is None:
         return "no-normalization"
     if normalization == "by_minmax":
         return "by_minmax"
     raise ValueError("Normalization can only be None or 'by_minmax'.")
-
-
-def _to_bool_series(series: pd.Series) -> pd.Series:
-    if pd.api.types.is_bool_dtype(series):
-        return series.fillna(False)
-    values = series.astype(str).str.strip().str.lower()
-    return values.isin({"1", "true", "t", "yes", "y"})
-
-
-def _extract_trial_id_from_name(path: Path) -> Optional[int]:
-    stem = path.stem
-    m = re.search(r"trial-(\d+)", stem)
-    if m is not None:
-        return int(m.group(1))
-    if stem.isdigit():
-        return int(stem)
-    m2 = re.search(r"_(\d+)$", stem)
-    if m2 is not None:
-        return int(m2.group(1))
-    return None
-
-
-def _resolve_trial_response_file(responses_dir: Path, trial_id: int) -> Optional[Path]:
-    matches: List[Path] = []
-    for fpath in sorted(responses_dir.glob("*.npy")):
-        tid = _extract_trial_id_from_name(fpath)
-        if tid == int(trial_id):
-            matches.append(fpath)
-            continue
-        # Explicit fallback to satisfy requested rule where trial-<id> appears in names.
-        if f"trial-{trial_id}" in fpath.stem:
-            matches.append(fpath)
-
-    if len(matches) == 1:
-        return matches[0]
-    if len(matches) == 0:
-        return None
-    raise RuntimeError(
-        f"Multiple response files matched trial {trial_id} in {responses_dir}: "
-        f"{[str(m.name) for m in matches]}"
-    )
 
 
 def load_neuron_metadata(meta_root: Path, mouse_name: str) -> Tuple[np.ndarray, np.ndarray, np.ndarray]:
@@ -276,15 +235,8 @@ def compile_and_load_assign_module(
     return module, cmd, module_path
 
 
-def _eligible_trials(df_trials: pd.DataFrame) -> pd.DataFrame:
-    if "valid_response" not in df_trials.columns or "valid_trial" not in df_trials.columns:
-        raise ValueError("Metadata CSV must contain valid_response and valid_trial columns")
-    vr = _to_bool_series(df_trials["valid_response"])
-    vt = _to_bool_series(df_trials["valid_trial"])
-    return df_trials.loc[vr & vt].copy()
-
-
 def _run_single_trial(
+    mouse_name: str,
     trial_id: int,
     valid_frames: int,
     responses_dir: Path,
@@ -303,7 +255,7 @@ def _run_single_trial(
     if src_file is None:
         return {"status": "missing", "trial": int(trial_id), "message": "response file not found"}
 
-    out_file = output_trials_dir / f"{file_prefix}{src_file.name}"
+    out_file = output_trials_dir / f"{file_prefix}rec-{mouse_name}_trial-{int(trial_id)}.npy"
     if skip_existing and out_file.exists():
         return {"status": "skipped_existing", "trial": int(trial_id), "file": str(out_file)}
 
@@ -492,6 +444,7 @@ def run_pipeline(state: RunState) -> Dict[str, object]:
             trial_id = int(row["trial"])
             valid_frames = int(row["valid_frames"])
             result = _run_single_trial(
+                mouse_name=mouse_name,
                 trial_id=trial_id,
                 valid_frames=valid_frames,
                 responses_dir=responses_dir,
@@ -524,6 +477,7 @@ def run_pipeline(state: RunState) -> Dict[str, object]:
             "normalization_source": "responses.get_data(by_minmax) parity",
             "trial_filter": "valid_response == True and valid_trial == True",
             "trial_file_match_rule": "trial id extracted from filename via trial-<id> or numeric stem",
+            "output_filename_pattern": f"{prefix}rec-<mouse_name>_trial-<trial_id>.npy",
             "output_prefix": prefix,
             "fortran_source": str(state.fortran_source),
             "fortran_compile_command": [str(c) for c in compile_cmd],

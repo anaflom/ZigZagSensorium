@@ -61,6 +61,40 @@ def load_trial_metadata(meta_root: Path, mouse_name: str) -> pd.DataFrame:
     return pd.read_csv(csv_path)
 
 
+def _extract_trial_id_from_name(path: Path) -> Optional[int]:
+    stem = path.stem
+    m = re.search(r"trial-(\d+)$", stem)
+    if m is not None:
+        return int(m.group(1))
+    if stem.isdigit():
+        return int(stem)
+    m2 = re.search(r"_(\d+)$", stem)
+    if m2 is not None:
+        return int(m2.group(1))
+    return None
+
+
+def _resolve_trial_response_file(responses_dir: Path, trial_id: int) -> Optional[Path]:
+    matches: List[Path] = []
+    for fpath in sorted(responses_dir.glob("*.npy")):
+        tid = _extract_trial_id_from_name(fpath)
+        if tid == int(trial_id):
+            matches.append(fpath)
+            continue
+        # # Explicit fallback to satisfy requested rule where trial-<id> appears in names.
+        # if f"trial-{trial_id}" in fpath.stem:
+        #     matches.append(fpath)
+
+    if len(matches) == 1:
+        return matches[0]
+    if len(matches) == 0:
+        return None
+    raise RuntimeError(
+        f"Multiple response files matched trial {trial_id} in {responses_dir}: "
+        f"{[str(m.name) for m in matches]}"
+    )
+
+
 def load_labelled_barcodes(
     data_root: Path,
     meta_root: Path,
@@ -68,18 +102,26 @@ def load_labelled_barcodes(
     zz_folder: str,
     max_trials: Optional[int] = None,
 ) -> Tuple[List[List[Tuple[float, float, float]]], np.ndarray, List[int], np.ndarray]:
-    """Load barcodes and attach labels/valid frame counts from metadata."""
+    """Load eligible barcodes and attach labels/valid frame counts from metadata.
+
+    When ``max_trials`` is provided, the cap is applied *after* metadata filtering
+    (valid_response & valid_trial). Candidate files are shuffled before loading.
+    """
     df = load_trial_metadata(meta_root, mouse_name)
-    trial_to_label = dict(zip(df["trial"].astype(int), df["label"]))
-    trial_to_frames = dict(zip(df["trial"].astype(int), df["valid_frames"].astype(int)))
+    df_eligible = _eligible_trials(df)
+    trial_to_label = dict(zip(df_eligible["trial"].astype(int), df_eligible["label"]))
+    trial_to_frames = dict(zip(df_eligible["trial"].astype(int), df_eligible["valid_frames"].astype(int)))
 
     zz_dir = data_root / mouse_name / zz_folder
     files = sorted(zz_dir.glob("zz-thresh-*.npy"))
     files = [f for f in files if "info" not in f.name]
 
     if max_trials is not None and files:
-        indices = np.linspace(0, len(files) - 1, min(max_trials, len(files)), dtype=int)
-        files = [files[i] for i in indices]
+        # Apply max_trials after eligibility filtering by randomizing candidates
+        # and early-stopping once enough valid trials are collected.
+        rng = np.random.default_rng()
+        order = rng.permutation(len(files))
+        files = [files[i] for i in order]
 
     barcodes: List[List[Tuple[float, float, float]]] = []
     labels_list: List[str] = []
@@ -87,12 +129,9 @@ def load_labelled_barcodes(
     frames_list: List[int] = []
 
     for fpath in files:
-        # Anchor to end of filename so we do not capture unrelated numbers.
-        match = re.search(r"trial-(\d+)$", fpath.stem)
-        if match is None:
+        trial_num = _extract_trial_id_from_name(fpath)
+        if trial_num is None:
             continue
-
-        trial_num = int(match.group(1))
         if trial_num not in trial_to_label:
             continue
 
@@ -103,7 +142,52 @@ def load_labelled_barcodes(
         trial_ids.append(trial_num)
         frames_list.append(trial_to_frames[trial_num])
 
+        if max_trials is not None and len(barcodes) >= max_trials:
+            break
+
     return barcodes, np.array(labels_list), trial_ids, np.array(frames_list)
+
+
+def load_labelled_grid_paths(
+    data_root: Path,
+    meta_root: Path,
+    mouse_name: str,
+    grid_subdir: str = "trials_grid",
+) -> Tuple[List[Path], np.ndarray, List[int], np.ndarray]:
+    """Load eligible grid file paths and attach labels/valid frame counts.
+
+    Expects grid files under ``<data_root>/<mouse_name>/<grid_subdir>`` and uses
+    the trial id extracted from filenames to align with eligible metadata rows.
+    """
+    df = load_trial_metadata(meta_root, mouse_name)
+    df_eligible = _eligible_trials(df)
+    trial_to_label = dict(zip(df_eligible["trial"].astype(int), df_eligible["label"]))
+    trial_to_frames = dict(zip(df_eligible["trial"].astype(int), df_eligible["valid_frames"].astype(int)))
+
+    grid_dir = data_root / mouse_name / grid_subdir
+    if not grid_dir.exists():
+        return [], np.array([]), [], np.array([])
+
+    paths = sorted(grid_dir.glob("*.npy"))
+
+    selected_paths: List[Path] = []
+    labels_list: List[str] = []
+    trial_ids: List[int] = []
+    frames_list: List[int] = []
+
+    for fpath in paths:
+        trial_num = _extract_trial_id_from_name(fpath)
+        if trial_num is None:
+            continue
+        if trial_num not in trial_to_label:
+            continue
+
+        selected_paths.append(fpath)
+        labels_list.append(trial_to_label[trial_num])
+        trial_ids.append(trial_num)
+        frames_list.append(trial_to_frames[trial_num])
+
+    return selected_paths, np.array(labels_list), trial_ids, np.array(frames_list)
 
 
 def clip_barcodes(
@@ -260,3 +344,24 @@ def create_vectorization(
         result["cache_path"] = str(cache_path)
 
     return result
+
+
+def _discover_mice(data_root: Path) -> List[str]:
+    return sorted(
+        [d.name for d in data_root.iterdir() if d.is_dir() and d.name.startswith("dynamic")]
+    )
+
+
+def _to_bool_series(series: pd.Series) -> pd.Series:
+    if pd.api.types.is_bool_dtype(series):
+        return series.fillna(False)
+    values = series.astype(str).str.strip().str.lower()
+    return values.isin({"1", "true", "t", "yes", "y"})
+
+
+def _eligible_trials(df_trials: pd.DataFrame) -> pd.DataFrame:
+    if "valid_response" not in df_trials.columns or "valid_trial" not in df_trials.columns:
+        raise ValueError("Metadata CSV must contain valid_response and valid_trial columns")
+    vr = _to_bool_series(df_trials["valid_response"])
+    vt = _to_bool_series(df_trials["valid_trial"])
+    return df_trials.loc[vr & vt].copy()

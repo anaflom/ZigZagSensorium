@@ -32,6 +32,8 @@ from utils import (
     create_vectorization,
     load_labelled_barcodes,
     load_vectorization_cache,
+    _discover_mice,
+    _eligible_trials,
 )
 
 
@@ -80,12 +82,6 @@ def _build_zz_folder(p_active: int, per_trial_thresh: bool) -> str:
     if per_trial_thresh:
         return f"trials_zz-thresh-{p_active}-per-trial"
     return f"trials_zz-thresh-{p_active}"
-
-
-def _discover_mice(data_root: Path) -> List[str]:
-    return sorted(
-        [d.name for d in data_root.iterdir() if d.is_dir() and d.name.startswith("dynamic")]
-    )
 
 
 def _resolve_mouse_cache_dir(state: RunState, mouse_name: str) -> Path:
@@ -314,7 +310,7 @@ def run_pipeline(state: RunState) -> Dict[str, object]:
         ax.legend(loc="upper right")
         fig.tight_layout()
         summary_fig_path = figures_dir / "01_within_mouse_scores.png"
-        fig.savefig(summary_fig_path, dpi=180, bbox_inches="tight")
+        fig.savefig(summary_fig_path, dpi=300, bbox_inches="tight")
         plt.close(fig)
         print(f"Saved figure: {summary_fig_path}")
 
@@ -347,7 +343,7 @@ def run_pipeline(state: RunState) -> Dict[str, object]:
         fig.suptitle(f"Normalized confusion matrices ({state.method})", fontsize=12)
         fig.tight_layout()
         cm_fig_path = figures_dir / "02_confusion_matrices.png"
-        fig.savefig(cm_fig_path, dpi=180, bbox_inches="tight")
+        fig.savefig(cm_fig_path, dpi=300, bbox_inches="tight")
         plt.close(fig)
         print(f"Saved figure: {cm_fig_path}")
 

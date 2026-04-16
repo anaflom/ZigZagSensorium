@@ -516,6 +516,10 @@ def run_pipeline(state: RunState, output_dir: Path) -> Dict[str, object]:
             print("\n## 6. Skipped by CLI")
             artifacts["status"]["6"] = "skipped"
 
+        # Free large objects no longer needed after section 6.
+        del features
+        del distance_matrices
+
         # Section 7
         results: Dict[str, Dict[str, float]] = {}
         mouse_2 = state.mouse_2
@@ -614,6 +618,16 @@ def run_pipeline(state: RunState, output_dir: Path) -> Dict[str, object]:
                 print("Section 7 failed:")
                 traceback.print_exc()
                 artifacts["status"]["7"] = "failed"
+            finally:
+                # Free cross-mouse data regardless of success/failure.
+                try:
+                    del all_barcodes
+                except NameError:
+                    pass
+                try:
+                    del barcodes_2
+                except NameError:
+                    pass
         else:
             print("\n## 7. Skipped by CLI")
             artifacts["status"]["7"] = "skipped"
@@ -657,6 +671,7 @@ def run_pipeline(state: RunState, output_dir: Path) -> Dict[str, object]:
                 print("Pre-normalising clipped barcodes to DiagramDict ...")
                 stim_diagrams = [normalize_diagram(b, drop_inf=True) for b in stim_barcodes_clipped]
                 print(f"Done - {len(stim_diagrams)} diagrams ready.")
+                del stim_barcodes_clipped  # raw clipped barcodes no longer needed
 
                 stim_vectorizers = make_stim_vectorizers(clip_frames_used)
                 cv_stim = StratifiedKFold(n_splits=5, shuffle=True, random_state=42)
@@ -701,6 +716,8 @@ def run_pipeline(state: RunState, output_dir: Path) -> Dict[str, object]:
                         )
                     except Exception as exc:
                         print(f"  {vname:>15s}: FAILED - {exc}")
+
+                del stim_barcodes  # free raw barcodes after vectorization loop
 
                 if stim_results:
                     names = list(stim_results.keys())
