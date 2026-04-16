@@ -1,13 +1,13 @@
 #!/bin/bash
-#SBATCH --job-name=zz-cross-mouse
+#SBATCH --job-name=zz-cross-mouse-ablation
 #SBATCH --partition=GPU
 #SBATCH --account=MDMC
 #SBATCH --gres=gpu:V100:1
 #SBATCH --cpus-per-task=8
 #SBATCH --mem=120G
 #SBATCH --time=12:00:00
-#SBATCH --output=logs/slurm-zz-cross-mouse-%j.out
-#SBATCH --error=logs/slurm-zz-cross-mouse-%j.err
+#SBATCH --output=logs/slurm-zz-cross-mouse-ablation-%j.out
+#SBATCH --error=logs/slurm-zz-cross-mouse-ablation-%j.err
 
 # ============================================================================
 # Cross-mouse leave-one-mouse-out classification using zigzag vectorizations
