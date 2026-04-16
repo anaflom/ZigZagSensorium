@@ -56,7 +56,7 @@ META_ROOT="${META_ROOT:-/u/mdmc/anaflom/projects_mdmc/sensorium/metadata}"
 
 # Core parameters
 P_ACTIVE="${P_ACTIVE:-30}"
-PER_TRIAL_THRESH="${PER_TRIAL_THRESH:-true}"
+PER_TRIAL_THRESH="${PER_TRIAL_THRESH:-false}"
 METHOD="${METHOD:-Turnover}"
 MICE="${MICE:-None}"
 CLIP_FRAMES="${CLIP_FRAMES:-None}"

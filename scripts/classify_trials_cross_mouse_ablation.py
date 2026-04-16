@@ -21,6 +21,7 @@ import copy
 import csv
 import json
 import random
+import re
 import sys
 import traceback
 from contextlib import redirect_stderr, redirect_stdout
@@ -138,6 +139,13 @@ def _set_seed(seed: int) -> None:
     torch.manual_seed(seed)
     if torch.cuda.is_available():
         torch.cuda.manual_seed_all(seed)
+
+
+def _short_mouse_name(name: str) -> str:
+    m = re.match(r"dynamic(\d+)-(\d+)-(\d+)", name)
+    if m:
+        return f"rec-{m.group(1)}-{m.group(2)}-{m.group(3)}"
+    return name
 
 
 def _infer_cnn1d_shape(feat_dim: int, clip_frames: int) -> Tuple[int, int]:
@@ -895,7 +903,7 @@ def run_pipeline(state: RunState) -> Dict[str, object]:
 
         fold_order = sorted(per_fold.keys())
 
-        fig, ax = plt.subplots(figsize=(max(9, len(fold_order) * 1.3), 5.0))
+        fig, (ax_f1, ax_acc) = plt.subplots(2, 1, figsize=(max(9, len(fold_order) * 1.3), 9.0), sharex=True)
         x = np.arange(len(fold_order))
         width = 0.18
         offsets = {
@@ -911,15 +919,21 @@ def run_pipeline(state: RunState) -> Dict[str, object]:
             "cnn3d": "#DD8452",
         }
         for mk in model_order:
-            vals = [float(per_fold[m]["models"][mk]["macro_f1"]) for m in fold_order]
-            ax.bar(x + offsets[mk], vals, width, label=model_titles[mk], alpha=0.85, color=colors[mk])
-        ax.set_xticks(x)
-        ax.set_xticklabels(fold_order, rotation=30, ha="right", fontsize=8)
-        ax.set_ylim(0, 1.05)
-        ax.set_ylabel("Macro-F1")
-        ax.set_title(f"Cross-mouse LOMO macro-F1 by test mouse ({state.method})")
-        ax.grid(axis="y", alpha=0.25)
-        ax.legend(loc="upper right", ncol=2, fontsize=8)
+            vals_f1 = [float(per_fold[m]["models"][mk]["macro_f1"]) for m in fold_order]
+            vals_acc = [float(per_fold[m]["models"][mk]["accuracy"]) for m in fold_order]
+            ax_f1.bar(x + offsets[mk], vals_f1, width, label=model_titles[mk], alpha=0.85, color=colors[mk])
+            ax_acc.bar(x + offsets[mk], vals_acc, width, label=model_titles[mk], alpha=0.85, color=colors[mk])
+        ax_f1.set_ylim(0, 1.05)
+        ax_f1.set_ylabel("Macro-F1")
+        ax_f1.set_title(f"Cross-mouse LOMO macro-F1 by test mouse ({state.method})")
+        ax_f1.grid(axis="y", alpha=0.25)
+        ax_f1.legend(loc="upper right", ncol=2, fontsize=8)
+        ax_acc.set_xticks(x)
+        ax_acc.set_xticklabels([_short_mouse_name(m) for m in fold_order], rotation=30, ha="right", fontsize=8)
+        ax_acc.set_ylim(0, 1.05)
+        ax_acc.set_ylabel("Accuracy")
+        ax_acc.set_title(f"Cross-mouse LOMO accuracy by test mouse ({state.method})")
+        ax_acc.grid(axis="y", alpha=0.25)
         fig.tight_layout()
         fig1 = figures_dir / "01_lomo_macro_f1_by_test_mouse.png"
         fig.savefig(fig1, dpi=300, bbox_inches="tight")
@@ -978,7 +992,7 @@ def run_pipeline(state: RunState) -> Dict[str, object]:
                     colorbar=False,
                     values_format=".2f",
                 )
-                title = f"{mouse_name}\n{model_titles[mk]}"
+                title = f"{_short_mouse_name(mouse_name)}\n{model_titles[mk]}"
                 if mk == best_model:
                     title += " ★"
                 ax.set_title(title, fontsize=7)
