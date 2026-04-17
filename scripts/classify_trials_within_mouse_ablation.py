@@ -45,6 +45,7 @@ from utils import (
     load_labelled_barcodes,
     load_labelled_grid_paths,
     load_vectorization_cache,
+    _short_mouse_name,
 )
 
 
@@ -132,13 +133,6 @@ def _set_seed(seed: int) -> None:
     torch.manual_seed(seed)
     if torch.cuda.is_available():
         torch.cuda.manual_seed_all(seed)
-
-
-def _short_mouse_name(name: str) -> str:
-    m = re.match(r"dynamic(\d+)-(\d+)-(\d+)", name)
-    if m:
-        return f"rec-{m.group(1)}-{m.group(2)}-{m.group(3)}"
-    return name
 
 
 class VectorDataset(Dataset):

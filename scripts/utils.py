@@ -357,6 +357,18 @@ def _discover_mice(data_root: Path) -> List[str]:
     )
 
 
+def _short_mouse_name(name: str) -> str:
+    """Return a compact mouse label from a full directory name.
+
+    Example: ``dynamic29156-11-10-Video-...`` → ``rec-29156-11-10``.
+    Falls back to the original name if the pattern is not matched.
+    """
+    m = re.match(r"dynamic(\d+)-(\d+)-(\d+)", name)
+    if m:
+        return f"rec-{m.group(1)}-{m.group(2)}-{m.group(3)}"
+    return name
+
+
 def _to_bool_series(series: pd.Series) -> pd.Series:
     if pd.api.types.is_bool_dtype(series):
         return series.fillna(False)
