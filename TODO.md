@@ -5,9 +5,6 @@
 ### Cropping of the vectorizations
 - Check why for the random dots that lats 240 frames not 100% of the barcodes are kept
 
-### Thresholds for the per-trial definition
-- Check the distribution of thresholds across labels.
-
 ### Saving results
 - Is it necessary to save anything else?
 - Check that all data required to reproduce the figures is saved.
