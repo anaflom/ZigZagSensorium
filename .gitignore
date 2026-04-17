@@ -10,7 +10,7 @@ env/
 
 # Notebooks
 .ipynb_checkpoints/
-notebooks/
+notebooks/test*.ipynb
 notebooks/.ipynb_checkpoints/
 notebooks/cache/
 

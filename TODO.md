@@ -3,8 +3,7 @@
 ## To check
 
 ### Cropping of the vectorizations
-- Check that the death time is captured correctly; it might currently correspond to the slicing index.
-- Check whether features with birth before the cropping sample and death after it are, or should be, included.
+- Check why for the random dots that lats 240 frames not 100% of the barcodes are kept
 
 ### Thresholds for the per-trial definition
 - Check the distribution of thresholds across labels.
@@ -16,6 +15,9 @@
 ### Imbalance in the video-label distribution
 - Check whether the classification metric is the best choice given the imbalanced distribution of trials across labels (for example, macro F1).
 - Check whether another design should be applied, such as resampling.
+
+### Classification schema for the cross mice
+- In the current implementation only the labels common to training and testing sets are kept (4 labels). COnsider if keeping all 6 labels could make sense
 
 
 ## Next steps
