@@ -68,9 +68,19 @@ ZigZagSensorium/
 | `classify_trials_within_mouse.py` | Within-mouse trial classification using configurable zigzag vectorizations. Trains and evaluates a classifier on trials from a single mouse. |
 | `classify_trials_within_mouse_ablation.py` | Within-mouse trial classification using configurable zigzag vectorizations, and ablation study comparing zigzag vectorization models against a 3D-CNN baseline operating on raw activation grids. |
 | `classify_trials_cross_mouse_ablation.py` | Leave-one-mouse-out cross-mouse classification. Trains on all eligible mice and evaluates on the held-out mouse; restricts labels to those shared between train and test sets. Compares zigzag vectorization models against a 3D-CNN baseline operating on raw activation grids. |
+| `classify_trials_ablation_shuffle.py` | Unified shuffle ablation for within-mouse and cross-mouse classification. Supports `--shuffle-type time` (time-axis shuffle per voxel) and `--shuffle-type spatial` (single spatial voxel permutation reused across all frames). |
 | `utils.py` | Shared utilities for loading zigzag persistence data and computing vectorizations, used by all classification and exploration scripts. |
 
 Shell scripts (`.sh`) are the corresponding Slurm batch submission wrappers for each Python script.
+
+**Shuffle Note**
+
+The Slurm launcher `scripts/classify_trials_ablation_shuffle.sh` accepts `SHUFFLE_TYPE=time|spatial` (default: `time`) and passes it to `classify_trials_ablation_shuffle.py`.
+
+Shuffle outputs are stored in separate branches to avoid collisions:
+
+- `results/ablation_shuffle/time/...`
+- `results/ablation_shuffle/spatial/...`
 
 ---
 

@@ -58,7 +58,11 @@ Differences between video classes are fairly obvious and might be due to detecti
 Investigating whether the zigzag vectorizations carry information about the videos might tell us something about what they are catching.
 Classification might not be feasible due to the reduced number of trials; however, some things could still be done by looking at similarity matrices.
 
-- Look at similarity matrices for the zigzag vectorizations for the different repeated videos within mouse. Check if differences exist for videos belonging to different classes.
+- Look at similarity matrices for the zigzag vectorizations for the different repeated videos within mouse. Check if differences exist for videos belonging to different classes. 
+We have 
+    - 18 NaturalVideos x ~10
+    -
+
 - Analogous analysis across mice. This is reduced to the NaturalVideo category since we do not have the responses available for the second set of mice for the parametric stimuli, as well as for part of the NaturalVideos. I need to check how many responses are available across mice.
 
 Significance could be addressed by permuting ID labels.
