@@ -97,10 +97,10 @@
           "std_f1": 0.02182672807933699
         },
         "cnn1d": {
-          "mean_acc": 0.8622391084093213,
-          "std_acc": 0.033660524680097496,
-          "mean_f1": 0.64136112124801,
-          "std_f1": 0.11994956811962972
+          "mean_acc": 0.843677811550152,
+          "std_acc": 0.03458991493901478,
+          "mean_f1": 0.5807045189281956,
+          "std_f1": 0.13105734592305576
         },
         "cnn3d": {
           "mean_acc": 1.0,
@@ -127,7 +127,7 @@
         "NaturalVideo": 530,
         "RandomDots": 80
       },
-      "source": "computed",
+      "source": "cache",
       "cache_path": "/orfeo/scratch/area/ygardinazzi/sensorium_2026/derivatives/grid-15x15x10_norm-by_minmax/dynamic29234-6-9-Video-8744edeac3b4d1ce16b680916b5267ce/cache/dynamic29234-6-9-Video-8744edeac3b4d1ce16b680916b5267ce_Turnover_p30_pertrial1_clip240.npz",
       "best_model": "cnn3d",
       "cnn1d_channels": 3,
@@ -140,22 +140,22 @@
           "std_f1": 0.03312656984206049
         },
         "mlp": {
-          "mean_acc": 0.9574586679263108,
-          "std_acc": 0.010159663585756073,
-          "mean_f1": 0.9310895264381636,
-          "std_f1": 0.018715083873250753
+          "mean_acc": 0.9560793575814831,
+          "std_acc": 0.015475766522664011,
+          "mean_f1": 0.9271197410482855,
+          "std_f1": 0.02729263735742181
         },
         "cnn1d": {
-          "mean_acc": 0.7777515351913085,
-          "std_acc": 0.04630276641232623,
-          "mean_f1": 0.44381531799966234,
-          "std_f1": 0.16923376622444253
+          "mean_acc": 0.7916580066131318,
+          "std_acc": 0.08642557003537064,
+          "mean_f1": 0.5378722250442795,
+          "std_f1": 0.18456706337942386
         },
         "cnn3d": {
-          "mean_acc": 0.9986206896551725,
-          "std_acc": 0.002758620689655178,
-          "mean_f1": 0.998247881660204,
-          "std_f1": 0.003504236679592143
+          "mean_acc": 1.0,
+          "std_acc": 0.0,
+          "mean_f1": 1.0,
+          "std_f1": 0.0
         }
       }
     },
@@ -189,22 +189,22 @@
           "std_f1": 0.02635568024021202
         },
         "mlp": {
-          "mean_acc": 0.9480941593617649,
-          "std_acc": 0.008472235067388605,
-          "mean_f1": 0.8906089388339069,
-          "std_f1": 0.03281504235707872
+          "mean_acc": 0.9481138579730128,
+          "std_acc": 0.008363771457029804,
+          "mean_f1": 0.8908599513580956,
+          "std_f1": 0.03069058788772438
         },
         "cnn1d": {
-          "mean_acc": 0.7825568797399783,
-          "std_acc": 0.03178259061384176,
-          "mean_f1": 0.4639329389655608,
-          "std_f1": 0.036827939943335254
+          "mean_acc": 0.7210972126465084,
+          "std_acc": 0.09802536254327787,
+          "mean_f1": 0.3690017729944929,
+          "std_f1": 0.07445704313964217
         },
         "cnn3d": {
-          "mean_acc": 0.988761942283069,
-          "std_acc": 0.009551206383749056,
-          "mean_f1": 0.9812634088123182,
-          "std_f1": 0.01617742624616458
+          "mean_acc": 0.9915985423027676,
+          "std_acc": 0.00815351195398742,
+          "mean_f1": 0.9871809502271119,
+          "std_f1": 0.012255770097763997
         }
       }
     },
@@ -238,22 +238,22 @@
           "std_f1": 0.023977655434383998
         },
         "mlp": {
-          "mean_acc": 0.9211877394636016,
-          "std_acc": 0.014768412820409605,
-          "mean_f1": 0.8642724787215712,
-          "std_f1": 0.024193138720083034
+          "mean_acc": 0.9155938697318007,
+          "std_acc": 0.024713954196146318,
+          "mean_f1": 0.8522886770713075,
+          "std_f1": 0.03036954941371799
         },
         "cnn1d": {
-          "mean_acc": 0.7316475095785441,
-          "std_acc": 0.036754140445504194,
-          "mean_f1": 0.4257839882856695,
-          "std_f1": 0.05620203994294938
+          "mean_acc": 0.6489272030651341,
+          "std_acc": 0.1120397127554914,
+          "mean_f1": 0.3826413803149291,
+          "std_f1": 0.07827266521102196
         },
         "cnn3d": {
           "mean_acc": 0.9944731800766282,
           "std_acc": 0.008044357618461232,
-          "mean_f1": 0.9913612440191388,
-          "std_f1": 0.01245841598451442
+          "mean_f1": 0.9905281259458707,
+          "std_f1": 0.014032456475652627
         }
       }
     }
@@ -265,11 +265,11 @@
     "cnn3d"
   ],
   "figures": [
-    "/u/mdmc/anaflom/projects_mdmc/ZigZagSensorium/results/within_mouse_classification_ablation/p30-per-trial/p30_thr-true_method-Turnover_clip-None_cv5_20260416_170030/figures/01_ablation_macro_f1_by_mouse.png",
-    "/u/mdmc/anaflom/projects_mdmc/ZigZagSensorium/results/within_mouse_classification_ablation/p30-per-trial/p30_thr-true_method-Turnover_clip-None_cv5_20260416_170030/figures/02_ablation_mean_scores.png",
-    "/u/mdmc/anaflom/projects_mdmc/ZigZagSensorium/results/within_mouse_classification_ablation/p30-per-trial/p30_thr-true_method-Turnover_clip-None_cv5_20260416_170030/figures/03_all_classifier_confusion_matrices.png"
+    "/u/mdmc/anaflom/projects_mdmc/ZigZagSensorium/results/within_mouse_classification_ablation/p30-per-trial/p30_thr-true_method-Turnover_clip-None_cv5_20260416_211913/figures/01_ablation_macro_f1_by_mouse.png",
+    "/u/mdmc/anaflom/projects_mdmc/ZigZagSensorium/results/within_mouse_classification_ablation/p30-per-trial/p30_thr-true_method-Turnover_clip-None_cv5_20260416_211913/figures/02_ablation_mean_scores.png",
+    "/u/mdmc/anaflom/projects_mdmc/ZigZagSensorium/results/within_mouse_classification_ablation/p30-per-trial/p30_thr-true_method-Turnover_clip-None_cv5_20260416_211913/figures/03_all_classifier_confusion_matrices.png"
   ],
-  "log_path": "/u/mdmc/anaflom/projects_mdmc/ZigZagSensorium/results/within_mouse_classification_ablation/p30-per-trial/p30_thr-true_method-Turnover_clip-None_cv5_20260416_170030/logs/run.log",
+  "log_path": "/u/mdmc/anaflom/projects_mdmc/ZigZagSensorium/results/within_mouse_classification_ablation/p30-per-trial/p30_thr-true_method-Turnover_clip-None_cv5_20260416_211913/logs/run.log",
   "cache_dir": "<data_root>/<mouse>/cache",
   "device": "cuda"
 }

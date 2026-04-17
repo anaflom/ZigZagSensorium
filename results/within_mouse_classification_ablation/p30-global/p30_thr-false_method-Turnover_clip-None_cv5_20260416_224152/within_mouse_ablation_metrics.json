@@ -1,0 +1,275 @@
+{
+  "method": "Turnover",
+  "p_active": 30,
+  "per_trial_thresh": false,
+  "zz_folder": "trials_zz-thresh-30",
+  "grid_subdir": "trials_grid",
+  "mice": [
+    "dynamic29156-11-10-Video-8744edeac3b4d1ce16b680916b5267ce",
+    "dynamic29228-2-10-Video-8744edeac3b4d1ce16b680916b5267ce",
+    "dynamic29234-6-9-Video-8744edeac3b4d1ce16b680916b5267ce",
+    "dynamic29513-3-5-Video-8744edeac3b4d1ce16b680916b5267ce",
+    "dynamic29514-2-9-Video-8744edeac3b4d1ce16b680916b5267ce"
+  ],
+  "results": {
+    "dynamic29156-11-10-Video-8744edeac3b4d1ce16b680916b5267ce": {
+      "n_trials": 720,
+      "n_features": 720,
+      "clip_frames": 240,
+      "cv_folds": 5,
+      "class_labels": [
+        "GaussianDot",
+        "NaturalVideo",
+        "PinkNoise",
+        "RandomDots"
+      ],
+      "class_counts": {
+        "GaussianDot": 59,
+        "NaturalVideo": 523,
+        "PinkNoise": 59,
+        "RandomDots": 79
+      },
+      "source": "computed",
+      "cache_path": "/orfeo/scratch/area/ygardinazzi/sensorium_2026/derivatives/grid-15x15x10_norm-by_minmax/dynamic29156-11-10-Video-8744edeac3b4d1ce16b680916b5267ce/cache/dynamic29156-11-10-Video-8744edeac3b4d1ce16b680916b5267ce_Turnover_p30_pertrial0_clip240.npz",
+      "best_model": "cnn3d",
+      "cnn1d_channels": 3,
+      "cnn1d_seq_len": 240,
+      "models": {
+        "logreg": {
+          "mean_acc": 0.8694444444444445,
+          "std_acc": 0.018320702719823487,
+          "mean_f1": 0.7637218334009737,
+          "std_f1": 0.023194353585458325
+        },
+        "mlp": {
+          "mean_acc": 0.8875,
+          "std_acc": 0.028934259244443976,
+          "mean_f1": 0.794561896072769,
+          "std_f1": 0.041846740288183984
+        },
+        "cnn1d": {
+          "mean_acc": 0.6861111111111111,
+          "std_acc": 0.08441428555012638,
+          "mean_f1": 0.34848606996501086,
+          "std_f1": 0.0550503285663471
+        },
+        "cnn3d": {
+          "mean_acc": 0.9986111111111111,
+          "std_acc": 0.002777777777777768,
+          "mean_f1": 0.9977607655502393,
+          "std_f1": 0.004478468899521548
+        }
+      }
+    },
+    "dynamic29228-2-10-Video-8744edeac3b4d1ce16b680916b5267ce": {
+      "n_trials": 704,
+      "n_features": 900,
+      "clip_frames": 300,
+      "cv_folds": 5,
+      "class_labels": [
+        "Gabor",
+        "NaturalImages",
+        "NaturalVideo",
+        "PinkNoise"
+      ],
+      "class_counts": {
+        "Gabor": 59,
+        "NaturalImages": 59,
+        "NaturalVideo": 527,
+        "PinkNoise": 59
+      },
+      "source": "computed",
+      "cache_path": "/orfeo/scratch/area/ygardinazzi/sensorium_2026/derivatives/grid-15x15x10_norm-by_minmax/dynamic29228-2-10-Video-8744edeac3b4d1ce16b680916b5267ce/cache/dynamic29228-2-10-Video-8744edeac3b4d1ce16b680916b5267ce_Turnover_p30_pertrial0_clip300.npz",
+      "best_model": "cnn3d",
+      "cnn1d_channels": 3,
+      "cnn1d_seq_len": 300,
+      "models": {
+        "logreg": {
+          "mean_acc": 0.9531509625126645,
+          "std_acc": 0.018234560221900682,
+          "mean_f1": 0.9200479792718902,
+          "std_f1": 0.03692059152579978
+        },
+        "mlp": {
+          "mean_acc": 0.9730395136778114,
+          "std_acc": 0.013737660349160078,
+          "mean_f1": 0.9547182200531749,
+          "std_f1": 0.02301014126354474
+        },
+        "cnn1d": {
+          "mean_acc": 0.8494427558257346,
+          "std_acc": 0.038906830448367326,
+          "mean_f1": 0.6292493696745024,
+          "std_f1": 0.09168423024084853
+        },
+        "cnn3d": {
+          "mean_acc": 1.0,
+          "std_acc": 0.0,
+          "mean_f1": 1.0,
+          "std_f1": 0.0
+        }
+      }
+    },
+    "dynamic29234-6-9-Video-8744edeac3b4d1ce16b680916b5267ce": {
+      "n_trials": 729,
+      "n_features": 720,
+      "clip_frames": 240,
+      "cv_folds": 5,
+      "class_labels": [
+        "Gabor",
+        "NaturalImages",
+        "NaturalVideo",
+        "RandomDots"
+      ],
+      "class_counts": {
+        "Gabor": 59,
+        "NaturalImages": 60,
+        "NaturalVideo": 530,
+        "RandomDots": 80
+      },
+      "source": "cache",
+      "cache_path": "/orfeo/scratch/area/ygardinazzi/sensorium_2026/derivatives/grid-15x15x10_norm-by_minmax/dynamic29234-6-9-Video-8744edeac3b4d1ce16b680916b5267ce/cache/dynamic29234-6-9-Video-8744edeac3b4d1ce16b680916b5267ce_Turnover_p30_pertrial0_clip240.npz",
+      "best_model": "cnn3d",
+      "cnn1d_channels": 3,
+      "cnn1d_seq_len": 240,
+      "models": {
+        "logreg": {
+          "mean_acc": 0.9533396315540861,
+          "std_acc": 0.011076503227631776,
+          "mean_f1": 0.920064886990809,
+          "std_f1": 0.024254911852495405
+        },
+        "mlp": {
+          "mean_acc": 0.9629381199811053,
+          "std_acc": 0.014845590364609185,
+          "mean_f1": 0.9361878123821347,
+          "std_f1": 0.03138977843536448
+        },
+        "cnn1d": {
+          "mean_acc": 0.7887576759565423,
+          "std_acc": 0.02608199221169002,
+          "mean_f1": 0.5505633472462871,
+          "std_f1": 0.054453342716192905
+        },
+        "cnn3d": {
+          "mean_acc": 0.9986206896551725,
+          "std_acc": 0.002758620689655178,
+          "mean_f1": 0.998152354990156,
+          "std_f1": 0.0036952900196880025
+        }
+      }
+    },
+    "dynamic29513-3-5-Video-8744edeac3b4d1ce16b680916b5267ce": {
+      "n_trials": 713,
+      "n_features": 900,
+      "clip_frames": 300,
+      "cv_folds": 5,
+      "class_labels": [
+        "GaussianDot",
+        "NaturalImages",
+        "NaturalVideo",
+        "PinkNoise"
+      ],
+      "class_counts": {
+        "GaussianDot": 60,
+        "NaturalImages": 58,
+        "NaturalVideo": 535,
+        "PinkNoise": 60
+      },
+      "source": "computed",
+      "cache_path": "/orfeo/scratch/area/ygardinazzi/sensorium_2026/derivatives/grid-15x15x10_norm-by_minmax/dynamic29513-3-5-Video-8744edeac3b4d1ce16b680916b5267ce/cache/dynamic29513-3-5-Video-8744edeac3b4d1ce16b680916b5267ce_Turnover_p30_pertrial0_clip300.npz",
+      "best_model": "cnn3d",
+      "cnn1d_channels": 3,
+      "cnn1d_seq_len": 300,
+      "models": {
+        "logreg": {
+          "mean_acc": 0.9158278341376933,
+          "std_acc": 0.011869389993539089,
+          "mean_f1": 0.8215614768244887,
+          "std_f1": 0.022487558593031153
+        },
+        "mlp": {
+          "mean_acc": 0.9424997537673594,
+          "std_acc": 0.013585816716340003,
+          "mean_f1": 0.883993079957445,
+          "std_f1": 0.02856205342153233
+        },
+        "cnn1d": {
+          "mean_acc": 0.7629863094651826,
+          "std_acc": 0.008927753119932462,
+          "mean_f1": 0.3399779704036098,
+          "std_f1": 0.012207803498220683
+        },
+        "cnn3d": {
+          "mean_acc": 0.9929971437013692,
+          "std_acc": 0.006254766620640669,
+          "mean_f1": 0.9891295542972397,
+          "std_f1": 0.009656201109109414
+        }
+      }
+    },
+    "dynamic29514-2-9-Video-8744edeac3b4d1ce16b680916b5267ce": {
+      "n_trials": 723,
+      "n_features": 720,
+      "clip_frames": 240,
+      "cv_folds": 5,
+      "class_labels": [
+        "Gabor",
+        "GaussianDot",
+        "NaturalVideo",
+        "RandomDots"
+      ],
+      "class_counts": {
+        "Gabor": 58,
+        "GaussianDot": 58,
+        "NaturalVideo": 528,
+        "RandomDots": 79
+      },
+      "source": "cache",
+      "cache_path": "/orfeo/scratch/area/ygardinazzi/sensorium_2026/derivatives/grid-15x15x10_norm-by_minmax/dynamic29514-2-9-Video-8744edeac3b4d1ce16b680916b5267ce/cache/dynamic29514-2-9-Video-8744edeac3b4d1ce16b680916b5267ce_Turnover_p30_pertrial0_clip240.npz",
+      "best_model": "cnn3d",
+      "cnn1d_channels": 3,
+      "cnn1d_seq_len": 240,
+      "models": {
+        "logreg": {
+          "mean_acc": 0.8575191570881227,
+          "std_acc": 0.014409327007347887,
+          "mean_f1": 0.7452683699057125,
+          "std_f1": 0.035885431312021
+        },
+        "mlp": {
+          "mean_acc": 0.9072892720306515,
+          "std_acc": 0.029334193838293384,
+          "mean_f1": 0.8185548397556527,
+          "std_f1": 0.06034539353309152
+        },
+        "cnn1d": {
+          "mean_acc": 0.728860153256705,
+          "std_acc": 0.030202253686979066,
+          "mean_f1": 0.3750149052698748,
+          "std_f1": 0.04783619292368788
+        },
+        "cnn3d": {
+          "mean_acc": 0.9944636015325671,
+          "std_acc": 0.006780743283029829,
+          "mean_f1": 0.990893753639341,
+          "std_f1": 0.01124894740583045
+        }
+      }
+    }
+  },
+  "models": [
+    "logreg",
+    "mlp",
+    "cnn1d",
+    "cnn3d"
+  ],
+  "figures": [
+    "/u/mdmc/anaflom/projects_mdmc/ZigZagSensorium/results/within_mouse_classification_ablation/p30-global/p30_thr-false_method-Turnover_clip-None_cv5_20260416_224152/figures/01_ablation_macro_f1_by_mouse.png",
+    "/u/mdmc/anaflom/projects_mdmc/ZigZagSensorium/results/within_mouse_classification_ablation/p30-global/p30_thr-false_method-Turnover_clip-None_cv5_20260416_224152/figures/02_ablation_mean_scores.png",
+    "/u/mdmc/anaflom/projects_mdmc/ZigZagSensorium/results/within_mouse_classification_ablation/p30-global/p30_thr-false_method-Turnover_clip-None_cv5_20260416_224152/figures/03_all_classifier_confusion_matrices.png"
+  ],
+  "log_path": "/u/mdmc/anaflom/projects_mdmc/ZigZagSensorium/results/within_mouse_classification_ablation/p30-global/p30_thr-false_method-Turnover_clip-None_cv5_20260416_224152/logs/run.log",
+  "cache_dir": "<data_root>/<mouse>/cache",
+  "device": "cuda"
+}
