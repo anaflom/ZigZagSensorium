@@ -74,6 +74,10 @@ from zztop.vectorizations import (
 from zztop.vectorizations._diagram import normalize_diagram
 
 from utils import (
+    _build_zz_folder,
+    _discover_mice,
+    _opt_int,
+    _str2bool,
     clip_barcodes,
     load_labelled_barcodes,
     load_zigzag_barcodes,
@@ -110,23 +114,6 @@ class FigureSaver:
         return out_path
 
 
-def _str2bool(value: str) -> bool:
-    v = value.strip().lower()
-    if v in {"1", "true", "t", "yes", "y", "on"}:
-        return True
-    if v in {"0", "false", "f", "no", "n", "off"}:
-        return False
-    raise argparse.ArgumentTypeError(f"Invalid boolean value: {value}")
-
-
-def _opt_int(value: str) -> Optional[int]:
-    if value is None:
-        return None
-    if value.strip().lower() in {"none", "null", ""}:
-        return None
-    return int(value)
-
-
 def _opt_str(value: Optional[str]) -> Optional[str]:
     if value is None:
         return None
@@ -151,18 +138,6 @@ def _parse_skip_sections(text: str) -> Set[str]:
 
 def _safe_name(name: str, n: int = 50) -> str:
     return f"{name[:n]}..." if len(name) > n else name
-
-
-def _build_zz_folder(p_active: int, per_trial_thresh: bool) -> str:
-    if per_trial_thresh:
-        return f"trials_zz-thresh-{p_active}-per-trial"
-    return f"trials_zz-thresh-{p_active}"
-
-
-def _discover_mice(data_root: Path) -> List[str]:
-    return sorted(
-        [d.name for d in data_root.iterdir() if d.is_dir() and d.name.startswith("dynamic")]
-    )
 
 
 def find_ref_mouse(

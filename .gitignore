@@ -14,6 +14,9 @@ notebooks/test*.ipynb
 notebooks/.ipynb_checkpoints/
 notebooks/cache/
 
+# Results
+results/
+
 # Tests
 tests/
 

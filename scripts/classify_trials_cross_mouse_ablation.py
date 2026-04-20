@@ -17,11 +17,9 @@ mouse and the pooled training mice.
 from __future__ import annotations
 
 import argparse
-import copy
 import csv
 import json
 import random
-import re
 import sys
 import traceback
 from contextlib import redirect_stderr, redirect_stdout
@@ -37,22 +35,30 @@ matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 import numpy as np
 import torch
-import torch.nn as nn
-import torch.nn.functional as F
-from sklearn.linear_model import LogisticRegression
-from sklearn.metrics import ConfusionMatrixDisplay, accuracy_score, confusion_matrix, f1_score
-from sklearn.model_selection import train_test_split
-from sklearn.pipeline import Pipeline
+from sklearn.metrics import ConfusionMatrixDisplay, confusion_matrix
 from sklearn.preprocessing import LabelEncoder, StandardScaler
-from torch.utils.data import DataLoader, Dataset, Subset
+
+from classification_models import (
+    CNN1D,
+    CNN3D,
+    MLP,
+    GridTrialDataset,
+    VectorDataset,
+    infer_cnn1d_shape,
+    train_eval_logreg,
+    train_eval_nn,
+)
 
 from utils import (
+    _build_zz_folder,
     _discover_mice,
-    build_vectorization_cache_stem,
-    create_vectorization,
+    _opt_csv_list,
+    _opt_int,
+    _resolve_mouse_cache_dir,
+    _str2bool,
     load_labelled_barcodes,
     load_labelled_grid_paths,
-    load_vectorization_cache,
+    load_or_compute_vectorization_features,
     _short_mouse_name,
 )
 
@@ -86,42 +92,6 @@ class RunState:
     num_workers_dl: int
 
 
-def _str2bool(value: str) -> bool:
-    v = value.strip().lower()
-    if v in {"1", "true", "t", "yes", "y", "on"}:
-        return True
-    if v in {"0", "false", "f", "no", "n", "off"}:
-        return False
-    raise argparse.ArgumentTypeError(f"Invalid boolean value: {value}")
-
-
-def _opt_int(value: str) -> Optional[int]:
-    if value is None:
-        return None
-    if value.strip().lower() in {"none", "null", ""}:
-        return None
-    return int(value)
-
-
-def _opt_csv_list(value: str) -> Optional[List[str]]:
-    if value is None:
-        return None
-    items = [x.strip() for x in value.split(",") if x.strip()]
-    return items if items else None
-
-
-def _build_zz_folder(p_active: int, per_trial_thresh: bool) -> str:
-    if per_trial_thresh:
-        return f"trials_zz-thresh-{p_active}-per-trial"
-    return f"trials_zz-thresh-{p_active}"
-
-
-def _resolve_mouse_cache_dir(state: RunState, mouse_name: str) -> Path:
-    if state.cache_dir is not None:
-        return state.cache_dir
-    return state.data_root / mouse_name / "cache"
-
-
 def _resolve_device(name: str) -> torch.device:
     if name == "cpu":
         return torch.device("cpu")
@@ -142,323 +112,6 @@ def _set_seed(seed: int) -> None:
         torch.cuda.manual_seed_all(seed)
 
 
-def _infer_cnn1d_shape(feat_dim: int, clip_frames: int) -> Tuple[int, int]:
-    if clip_frames > 0 and feat_dim % clip_frames == 0:
-        return int(feat_dim // clip_frames), int(clip_frames)
-    return 1, int(feat_dim)
-
-
-class VectorDataset(Dataset):
-    """Simple tensor dataset for vectorized features."""
-
-    def __init__(self, x: np.ndarray, y: np.ndarray) -> None:
-        self.x = torch.tensor(np.asarray(x, dtype=np.float32), dtype=torch.float32)
-        self.y = np.asarray(y, dtype=np.int64)
-
-    def __len__(self) -> int:
-        return int(self.y.shape[0])
-
-    def __getitem__(self, idx: int):
-        return self.x[idx], int(self.y[idx])
-
-
-class GridTrialDataset(Dataset):
-    """Lazy grid loader from <data_root>/<mouse>/<trials_grid> files."""
-
-    def __init__(
-        self,
-        grid_paths: Sequence[Path],
-        y: np.ndarray,
-        valid_frames: np.ndarray,
-        clip_frames: int,
-    ) -> None:
-        self.grid_paths = list(grid_paths)
-        self.y = np.asarray(y, dtype=np.int64)
-        self.valid_frames = np.asarray(valid_frames, dtype=np.int64)
-        self.clip_frames = int(clip_frames)
-
-        if len(self.grid_paths) == 0:
-            raise RuntimeError("GridTrialDataset received no paths")
-        if len(self.grid_paths) != int(self.y.shape[0]):
-            raise RuntimeError("Grid paths/labels length mismatch")
-        if len(self.grid_paths) != int(self.valid_frames.shape[0]):
-            raise RuntimeError("Grid paths/valid_frames length mismatch")
-
-        first_shape = np.load(self.grid_paths[0], mmap_mode="r").shape
-        if len(first_shape) != 4:
-            raise RuntimeError(f"Grid file must be 4D, got {first_shape} for {self.grid_paths[0]}")
-        self.in_channels = int(first_shape[2])
-
-    def __len__(self) -> int:
-        return len(self.grid_paths)
-
-    def __getitem__(self, idx: int):
-        arr = np.load(self.grid_paths[idx])
-        if arr.ndim != 4:
-            raise RuntimeError(f"Expected 4D grid array, got shape {arr.shape} in {self.grid_paths[idx]}")
-
-        x = arr.transpose(2, 3, 0, 1).astype(np.float32, copy=False)
-        t_eff = int(min(self.clip_frames, self.valid_frames[idx], x.shape[1]))
-        if t_eff <= 0:
-            raise RuntimeError(f"Invalid effective clip length={t_eff} for sample {self.grid_paths[idx]}")
-
-        out = np.zeros((x.shape[0], self.clip_frames, x.shape[2], x.shape[3]), dtype=np.float32)
-        out[:, :t_eff, :, :] = x[:, :t_eff, :, :]
-        return torch.tensor(out, dtype=torch.float32), int(self.y[idx])
-
-
-class MLP(nn.Module):
-    """MLP baseline for vectorized features."""
-
-    def __init__(self, n_classes: int, input_dim: int, dropout: float = 0.3) -> None:
-        super().__init__()
-        self.net = nn.Sequential(
-            nn.Linear(input_dim, 256),
-            nn.BatchNorm1d(256),
-            nn.ReLU(),
-            nn.Dropout(dropout),
-            nn.Linear(256, 128),
-            nn.BatchNorm1d(128),
-            nn.ReLU(),
-            nn.Dropout(dropout),
-            nn.Linear(128, n_classes),
-        )
-
-    def forward(self, x: torch.Tensor) -> torch.Tensor:
-        return self.net(x)
-
-
-class CNN1D(nn.Module):
-    """1D CNN baseline for vectorized features."""
-
-    def __init__(
-        self,
-        n_classes: int,
-        in_channels: int,
-        seq_len: int,
-        dropout: float = 0.3,
-    ) -> None:
-        super().__init__()
-        self.in_channels = int(in_channels)
-        self.seq_len = int(seq_len)
-        self.conv1 = nn.Conv1d(self.in_channels, 32, kernel_size=7, padding=3)
-        self.bn1 = nn.BatchNorm1d(32)
-        self.conv2 = nn.Conv1d(32, 64, kernel_size=5, padding=2)
-        self.bn2 = nn.BatchNorm1d(64)
-        self.conv3 = nn.Conv1d(64, 64, kernel_size=3, padding=1)
-        self.bn3 = nn.BatchNorm1d(64)
-        self.pool = nn.AdaptiveAvgPool1d(1)
-        self.drop = nn.Dropout(dropout)
-        self.fc = nn.Linear(64, n_classes)
-
-    def forward(self, x: torch.Tensor) -> torch.Tensor:
-        bsz = x.size(0)
-        x = x.view(bsz, self.in_channels, self.seq_len)
-        x = F.relu(self.bn1(self.conv1(x)))
-        x = F.max_pool1d(x, kernel_size=2, ceil_mode=True)
-        x = F.relu(self.bn2(self.conv2(x)))
-        x = F.max_pool1d(x, kernel_size=2, ceil_mode=True)
-        x = F.relu(self.bn3(self.conv3(x)))
-        x = self.pool(x).flatten(1)
-        x = self.drop(x)
-        return self.fc(x)
-
-
-class CNN3D(nn.Module):
-    """3D CNN operating on grids shaped (C, T, H, W)."""
-
-    def __init__(self, n_classes: int, in_channels: int, dropout: float = 0.3) -> None:
-        super().__init__()
-        self.conv1 = nn.Conv3d(in_channels, 32, kernel_size=(5, 3, 3), padding=(2, 1, 1))
-        self.bn1 = nn.BatchNorm3d(32)
-        self.conv2 = nn.Conv3d(32, 64, kernel_size=(5, 3, 3), padding=(2, 1, 1))
-        self.bn2 = nn.BatchNorm3d(64)
-        self.conv3 = nn.Conv3d(64, 128, kernel_size=(3, 3, 3), padding=(1, 1, 1))
-        self.bn3 = nn.BatchNorm3d(128)
-        self.pool = nn.AdaptiveAvgPool3d(1)
-        self.drop = nn.Dropout(dropout)
-        self.fc = nn.Linear(128, n_classes)
-
-    def forward(self, x: torch.Tensor) -> torch.Tensor:
-        x = F.relu(self.bn1(self.conv1(x)))
-        x = F.max_pool3d(x, kernel_size=(2, 2, 2), ceil_mode=True)
-        x = F.relu(self.bn2(self.conv2(x)))
-        x = F.max_pool3d(x, kernel_size=(2, 2, 2), ceil_mode=True)
-        x = F.relu(self.bn3(self.conv3(x)))
-        x = self.pool(x).flatten(1)
-        x = self.drop(x)
-        return self.fc(x)
-
-
-def _train_epoch(
-    model: nn.Module,
-    loader: DataLoader,
-    optimizer: torch.optim.Optimizer,
-    criterion: nn.Module,
-    device: torch.device,
-) -> None:
-    model.train()
-    for xb, yb in loader:
-        xb = xb.to(device, non_blocking=True)
-        yb = torch.as_tensor(yb, dtype=torch.long, device=device)
-        optimizer.zero_grad()
-        logits = model(xb)
-        loss = criterion(logits, yb)
-        loss.backward()
-        optimizer.step()
-
-
-@torch.no_grad()
-def _predict(model: nn.Module, loader: DataLoader, device: torch.device) -> np.ndarray:
-    model.eval()
-    preds: List[np.ndarray] = []
-    for xb, _yb in loader:
-        xb = xb.to(device, non_blocking=True)
-        logits = model(xb)
-        preds.append(logits.argmax(1).cpu().numpy())
-    return np.concatenate(preds, axis=0)
-
-
-def _build_train_val_indices(y_train: np.ndarray, seed: int) -> Tuple[Optional[np.ndarray], Optional[np.ndarray]]:
-    class_counts = np.bincount(y_train)
-    if len(y_train) < 10 or int(class_counts.min()) < 2:
-        return None, None
-
-    val_size = max(len(class_counts), int(round(0.2 * len(y_train))))
-    if val_size >= len(y_train):
-        return None, None
-
-    all_idx = np.arange(len(y_train))
-    try:
-        train_idx, val_idx = train_test_split(
-            all_idx,
-            test_size=val_size,
-            stratify=y_train,
-            random_state=seed,
-        )
-    except ValueError:
-        return None, None
-    return np.asarray(train_idx), np.asarray(val_idx)
-
-
-def _train_eval_nn(
-    make_model,
-    train_ds: Dataset,
-    y_train: np.ndarray,
-    test_ds: Dataset,
-    test_y: np.ndarray,
-    *,
-    epochs: int,
-    lr: float,
-    batch_size: int,
-    patience: int,
-    weight_decay: float,
-    device: torch.device,
-    num_workers: int,
-    seed: int,
-) -> Tuple[Dict[str, float], np.ndarray]:
-    train_idx, val_idx = _build_train_val_indices(y_train, seed=seed)
-
-    if train_idx is None or val_idx is None:
-        train_loader = DataLoader(
-            train_ds,
-            batch_size=batch_size,
-            shuffle=True,
-            num_workers=num_workers,
-            pin_memory=(device.type == "cuda"),
-        )
-        val_loader = None
-        val_y = None
-    else:
-        train_loader = DataLoader(
-            Subset(train_ds, train_idx),
-            batch_size=batch_size,
-            shuffle=True,
-            num_workers=num_workers,
-            pin_memory=(device.type == "cuda"),
-        )
-        val_loader = DataLoader(
-            Subset(train_ds, val_idx),
-            batch_size=batch_size,
-            shuffle=False,
-            num_workers=num_workers,
-            pin_memory=(device.type == "cuda"),
-        )
-        val_y = y_train[val_idx]
-
-    test_loader = DataLoader(
-        test_ds,
-        batch_size=batch_size,
-        shuffle=False,
-        num_workers=num_workers,
-        pin_memory=(device.type == "cuda"),
-    )
-
-    model = make_model().to(device)
-    optimizer = torch.optim.Adam(model.parameters(), lr=lr, weight_decay=weight_decay)
-    scheduler = (
-        torch.optim.lr_scheduler.ReduceLROnPlateau(optimizer, patience=3, factor=0.5)
-        if val_loader is not None
-        else None
-    )
-    criterion = nn.CrossEntropyLoss()
-
-    best_state = None
-    best_f1 = -1.0
-    wait = 0
-
-    for _epoch in range(int(epochs)):
-        _train_epoch(model, train_loader, optimizer, criterion, device)
-        if val_loader is not None and val_y is not None:
-            val_pred = _predict(model, val_loader, device)
-            val_f1 = float(f1_score(val_y, val_pred, average="macro", zero_division=0))
-            scheduler.step(1.0 - val_f1)
-            if val_f1 > best_f1:
-                best_f1 = val_f1
-                best_state = copy.deepcopy(model.state_dict())
-                wait = 0
-            else:
-                wait += 1
-                if wait >= int(patience):
-                    break
-        else:
-            best_state = copy.deepcopy(model.state_dict())
-
-    if best_state is not None:
-        model.load_state_dict(best_state)
-
-    pred = _predict(model, test_loader, device)
-    metrics = {
-        "accuracy": float(accuracy_score(test_y, pred)),
-        "macro_f1": float(f1_score(test_y, pred, average="macro", zero_division=0)),
-    }
-    return metrics, pred
-
-
-def _train_eval_logreg(
-    x_train: np.ndarray,
-    y_train: np.ndarray,
-    x_test: np.ndarray,
-    y_test: np.ndarray,
-) -> Tuple[Dict[str, float], np.ndarray]:
-    pipe = Pipeline(
-        [
-            ("scaler", StandardScaler()),
-            (
-                "clf",
-                LogisticRegression(max_iter=2000, random_state=42, class_weight="balanced"),
-            ),
-        ]
-    )
-    pipe.fit(x_train, y_train)
-    pred = pipe.predict(x_test)
-    metrics = {
-        "accuracy": float(accuracy_score(y_test, pred)),
-        "macro_f1": float(f1_score(y_test, pred, average="macro", zero_division=0)),
-    }
-    return metrics, pred
-
-
 def _load_mouse_data(state: RunState, mouse_name: str, global_clip: int) -> Optional[Dict[str, Any]]:
     barcodes, labels, trial_ids, valid_frames = load_labelled_barcodes(
         state.data_root,
@@ -472,72 +125,23 @@ def _load_mouse_data(state: RunState, mouse_name: str, global_clip: int) -> Opti
     if len(np.unique(labels)) < 2:
         return None
 
-    cache_stem = build_vectorization_cache_stem(
+    vec_trial_ids = [int(t) for t in trial_ids]
+    xmat, vec_source, cache_path = load_or_compute_vectorization_features(
+        data_root=state.data_root,
         mouse_name=mouse_name,
         method=state.method,
         p_active=state.p_active,
         per_trial_thresh=state.per_trial_thresh,
-        clip_frames=global_clip,
+        clip_frames=int(global_clip),
+        barcodes=barcodes,
+        labels=labels,
+        trial_ids=trial_ids,
+        valid_frames=valid_frames,
+        cache_dir=_resolve_mouse_cache_dir(state, mouse_name),
+        force_recompute=state.force_recompute,
+        expected_trial_ids=vec_trial_ids,
+        message_prefix=f"  [{mouse_name}] ",
     )
-    mouse_cache_dir = _resolve_mouse_cache_dir(state, mouse_name)
-    mouse_cache_dir.mkdir(parents=True, exist_ok=True)
-    cache_path = mouse_cache_dir / f"{cache_stem}.npz"
-
-    vec_trial_ids = [int(t) for t in trial_ids]
-    use_cache = False
-    if cache_path.exists() and not state.force_recompute:
-        cache = load_vectorization_cache(cache_path)
-        if "features" in cache:
-            xmat = np.asarray(cache["features"])
-        elif "X" in cache:
-            xmat = np.asarray(cache["X"])
-        else:
-            raise RuntimeError(f"Cache missing feature matrix: {cache_path}")
-        xmat = np.nan_to_num(xmat)
-
-        cache_trial_ids = None
-        if "trial_ids" in cache:
-            cache_trial_ids = [int(t) for t in np.asarray(cache["trial_ids"]).tolist()]
-
-        if cache_trial_ids is not None:
-            if len(cache_trial_ids) != int(xmat.shape[0]):
-                print(
-                    f"  [{mouse_name}] Cache mismatch: trial_ids length differs from feature rows; "
-                    "recomputing vectorization."
-                )
-            elif cache_trial_ids != vec_trial_ids:
-                print(
-                    f"  [{mouse_name}] Cache mismatch: cached trial_ids differ from current trial_ids; "
-                    "recomputing vectorization."
-                )
-            else:
-                use_cache = True
-        else:
-            if int(xmat.shape[0]) != len(vec_trial_ids):
-                print(
-                    f"  [{mouse_name}] Cache mismatch: feature rows differ from current trials and "
-                    "cache has no trial_ids; recomputing vectorization."
-                )
-            else:
-                use_cache = True
-
-        if use_cache:
-            vec_source = "cache"
-
-    if not use_cache:
-        vec_out = create_vectorization(
-            barcodes,
-            state.method,
-            clip_frames=global_clip,
-            output_folder=mouse_cache_dir,
-            cache_stem=cache_stem,
-            mouse_name=mouse_name,
-            labels=labels,
-            trial_ids=trial_ids,
-            valid_frames=valid_frames,
-        )
-        xmat = np.asarray(vec_out["features"])
-        vec_source = "computed"
 
     grid_paths, grid_labels, grid_trial_ids, grid_valid_frames = load_labelled_grid_paths(
         state.data_root,
@@ -680,6 +284,7 @@ def run_pipeline(state: RunState) -> Dict[str, object]:
         }
         per_fold: Dict[str, Dict[str, Any]] = {}
         confusion_payload: Dict[str, Dict[str, Any]] = {}
+        prediction_payload: Dict[str, Dict[str, Any]] = {}
 
         for test_mouse in eligible_mice:
             candidate_train_mice = [m for m in eligible_mice if m != test_mouse]
@@ -750,7 +355,7 @@ def run_pipeline(state: RunState) -> Dict[str, object]:
                 scaler = StandardScaler().fit(train_x_vec)
                 x_train_scaled = scaler.transform(train_x_vec)
                 x_test_scaled = scaler.transform(test_x_vec)
-                cnn1d_channels, cnn1d_seq_len = _infer_cnn1d_shape(train_x_vec.shape[1], global_clip)
+                cnn1d_channels, cnn1d_seq_len = infer_cnn1d_shape(train_x_vec.shape[1], global_clip)
                 vec_source_summary = (
                     next(iter(set(vec_sources_by_mouse.values())))
                     if len(set(vec_sources_by_mouse.values())) == 1
@@ -767,14 +372,14 @@ def run_pipeline(state: RunState) -> Dict[str, object]:
                     f"test_trials={len(test_y)}, train_mice={len(active_train_mice)}"
                 )
 
-                logreg_metrics, logreg_pred = _train_eval_logreg(
+                logreg_metrics, logreg_pred = train_eval_logreg(
                     x_train_scaled,
                     train_y,
                     x_test_scaled,
                     test_y,
                 )
 
-                mlp_metrics, mlp_pred = _train_eval_nn(
+                mlp_metrics, mlp_pred = train_eval_nn(
                     make_model=lambda: MLP(n_classes=len(shared_labels), input_dim=train_x_vec.shape[1]),
                     train_ds=VectorDataset(x_train_scaled, train_y),
                     y_train=train_y,
@@ -790,7 +395,7 @@ def run_pipeline(state: RunState) -> Dict[str, object]:
                     seed=state.seed,
                 )
 
-                cnn1d_metrics, cnn1d_pred = _train_eval_nn(
+                cnn1d_metrics, cnn1d_pred = train_eval_nn(
                     make_model=lambda: CNN1D(
                         n_classes=len(shared_labels),
                         in_channels=cnn1d_channels,
@@ -822,7 +427,7 @@ def run_pipeline(state: RunState) -> Dict[str, object]:
                     valid_frames=test_grid_frames,
                     clip_frames=global_clip,
                 )
-                cnn3d_metrics, cnn3d_pred = _train_eval_nn(
+                cnn3d_metrics, cnn3d_pred = train_eval_nn(
                     make_model=lambda: CNN3D(
                         n_classes=len(shared_labels),
                         in_channels=test_data["in_channels"],
@@ -882,6 +487,17 @@ def run_pipeline(state: RunState) -> Dict[str, object]:
                     "labels": shared_labels,
                     "cms": model_cms,
                     "best_model": best_model,
+                }
+                prediction_payload[test_mouse] = {
+                    "labels": [str(v) for v in shared_labels],
+                    "y_true": [int(v) for v in test_y.tolist()],
+                    "predictions": {
+                        mk: [int(v) for v in np.asarray(model_preds[mk]).tolist()]
+                        for mk in model_order
+                    },
+                    "best_model": best_model,
+                    "test_mouse": test_mouse,
+                    "train_mice": active_train_mice,
                 }
 
                 for mk in model_order:
@@ -997,6 +613,38 @@ def run_pipeline(state: RunState) -> Dict[str, object]:
         plt.close(fig)
         print(f"Saved figure: {fig3}")
 
+        confusion_json_path = output_folder / "cross_mouse_confusion_matrices.json"
+        confusion_json_payload: Dict[str, Dict[str, Any]] = {}
+        for mouse_name in fold_order:
+            payload = confusion_payload[mouse_name]
+            labels_order = [str(v) for v in payload["labels"]]
+            cms_counts: Dict[str, List[List[int]]] = {}
+            cms_norm: Dict[str, List[List[float]]] = {}
+            for mk in model_order:
+                cm = np.asarray(payload["cms"][mk], dtype=np.int64)
+                row_sums = cm.sum(axis=1, keepdims=True)
+                cm_norm = np.divide(cm, row_sums, out=np.zeros_like(cm, dtype=float), where=row_sums != 0)
+                cms_counts[mk] = cm.tolist()
+                cms_norm[mk] = cm_norm.tolist()
+            confusion_json_payload[mouse_name] = {
+                "labels": labels_order,
+                "best_model": payload["best_model"],
+                "cms_counts": cms_counts,
+                "cms_normalized": cms_norm,
+            }
+        with open(confusion_json_path, "w", encoding="utf-8") as fp:
+            json.dump(confusion_json_payload, fp, indent=2)
+        print(f"Wrote confusion JSON: {confusion_json_path}")
+
+        predictions_json_path = output_folder / "cross_mouse_prediction_outputs.json"
+        predictions_json_payload = {
+            mouse_name: prediction_payload[mouse_name]
+            for mouse_name in fold_order
+        }
+        with open(predictions_json_path, "w", encoding="utf-8") as fp:
+            json.dump(predictions_json_payload, fp, indent=2)
+        print(f"Wrote prediction JSON: {predictions_json_path}")
+
         summary_json_path = output_folder / "cross_mouse_metrics.json"
         summary_csv_path = output_folder / "cross_mouse_metrics.csv"
         payload = {
@@ -1011,6 +659,8 @@ def run_pipeline(state: RunState) -> Dict[str, object]:
             "models": model_order,
             "results": per_fold,
             "figures": [str(fig1), str(fig2), str(fig3)],
+            "confusion_matrices_path": str(confusion_json_path),
+            "prediction_outputs_path": str(predictions_json_path),
             "log_path": str(log_path),
             "cache_dir": (
                 str(state.cache_dir)
@@ -1079,6 +729,8 @@ def run_pipeline(state: RunState) -> Dict[str, object]:
         "log_path": str(log_path),
         "summary_json_path": str(summary_json_path),
         "summary_csv_path": str(summary_csv_path),
+        "confusion_json_path": str(confusion_json_path),
+        "predictions_json_path": str(predictions_json_path),
         "cache_dir": (
             str(state.cache_dir)
             if state.cache_dir is not None

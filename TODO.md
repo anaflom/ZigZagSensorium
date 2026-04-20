@@ -2,13 +2,6 @@
 
 ## To check
 
-### Cropping of the vectorizations
-- Check why for the random dots that lats 240 frames not 100% of the barcodes are kept
-
-### Saving results
-- Is it necessary to save anything else?
-- Check that all data required to reproduce the figures is saved.
-
 ### Imbalance in the video-label distribution
 - Check whether the classification metric is the best choice given the imbalanced distribution of trials across labels (for example, macro F1).
 - Check whether another design should be applied, such as resampling.

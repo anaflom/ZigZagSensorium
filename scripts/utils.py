@@ -8,9 +8,10 @@
 
 from __future__ import annotations
 
+import argparse
 import re
 from pathlib import Path
-from typing import Any, Dict, Iterable, List, Optional, Tuple
+from typing import Any, Dict, Iterable, List, Optional, Sequence, Tuple
 
 import numpy as np
 import pandas as pd
@@ -30,6 +31,51 @@ from zztop.vectorizations import (
     TurnoverRate,
 )
 from zztop.vectorizations._diagram import normalize_diagram
+
+
+def _str2bool(value: str) -> bool:
+    """Parse common boolean-like CLI strings into booleans."""
+    v = value.strip().lower()
+    if v in {"1", "true", "t", "yes", "y", "on"}:
+        return True
+    if v in {"0", "false", "f", "no", "n", "off"}:
+        return False
+    raise argparse.ArgumentTypeError(f"Invalid boolean value: {value}")
+
+
+def _opt_int(value: str) -> Optional[int]:
+    """Parse an optional integer from CLI string values."""
+    if value is None:
+        return None
+    if value.strip().lower() in {"none", "null", ""}:
+        return None
+    return int(value)
+
+
+def _opt_csv_list(value: str) -> Optional[List[str]]:
+    """Parse comma-separated strings into a list (or None)."""
+    if value is None:
+        return None
+    items = [x.strip() for x in value.split(",") if x.strip()]
+    return items if items else None
+
+
+def _build_zz_folder(p_active: int, per_trial_thresh: bool) -> str:
+    """Build zigzag folder name from threshold options."""
+    if per_trial_thresh:
+        return f"trials_zz-thresh-{p_active}-per-trial"
+    return f"trials_zz-thresh-{p_active}"
+
+
+def _resolve_mouse_cache_dir(state: Any, mouse_name: str) -> Path:
+    """Resolve cache path using state.cache_dir fallback to <data_root>/<mouse>/cache."""
+    cache_dir = getattr(state, "cache_dir", None)
+    if cache_dir is not None:
+        return Path(cache_dir)
+    data_root = getattr(state, "data_root", None)
+    if data_root is None:
+        raise AttributeError("state must define data_root when cache_dir is not set")
+    return Path(data_root) / mouse_name / "cache"
 
 
 def load_zigzag_barcodes(
@@ -198,12 +244,17 @@ def load_labelled_grid_paths(
 def clip_barcodes(
     barcodes: Iterable[Iterable[Tuple[float, float, float]]], n_frames: int
 ) -> List[List[Tuple[float, float, float]]]:
-    """Clip bars to a fixed frame budget by truncating deaths and dropping late births."""
+    """Clip bars to a fixed frame budget using zigzag endpoint times.
+
+    Barcode birth/death values are not zero-based frame indices. They are
+    1-based endpoint times for half-open intervals, so a birth exactly equal
+    to ``n_frames`` is still valid for a trial with ``n_frames`` samples.
+    """
     clipped: List[List[Tuple[float, float, float]]] = []
     for bars in barcodes:
         new_bars: List[Tuple[float, float, float]] = []
         for dim, b, d in bars:
-            if b >= n_frames:
+            if b > n_frames:
                 continue
             new_bars.append((dim, b, min(d, n_frames)))
         clipped.append(new_bars)
@@ -349,6 +400,98 @@ def create_vectorization(
         result["cache_path"] = str(cache_path)
 
     return result
+
+
+def load_or_compute_vectorization_features(
+    *,
+    data_root: Path,
+    mouse_name: str,
+    method: str,
+    p_active: int,
+    per_trial_thresh: bool,
+    clip_frames: int,
+    barcodes: Sequence[Sequence[Tuple[float, float, float]]],
+    labels: Optional[Sequence[str]],
+    trial_ids: Optional[Sequence[int]],
+    valid_frames: Optional[Sequence[int]],
+    cache_dir: Optional[Path] = None,
+    force_recompute: bool = False,
+    expected_trial_ids: Optional[Sequence[int]] = None,
+    message_prefix: str = "",
+) -> Tuple[np.ndarray, str, Path]:
+    """Load vectorization features from cache or compute them.
+
+    If ``expected_trial_ids`` is provided, cached features are validated against
+    those trial ids when available.
+    """
+    cache_stem = build_vectorization_cache_stem(
+        mouse_name=mouse_name,
+        method=method,
+        p_active=p_active,
+        per_trial_thresh=per_trial_thresh,
+        clip_frames=int(clip_frames),
+    )
+    mouse_cache_dir = cache_dir if cache_dir is not None else data_root / mouse_name / "cache"
+    mouse_cache_dir.mkdir(parents=True, exist_ok=True)
+    cache_path = mouse_cache_dir / f"{cache_stem}.npz"
+
+    use_cache = False
+    if cache_path.exists() and not force_recompute:
+        cache = load_vectorization_cache(cache_path)
+        if "features" in cache:
+            xmat = np.asarray(cache["features"])
+        elif "X" in cache:
+            xmat = np.asarray(cache["X"])
+        else:
+            raise RuntimeError(f"Cache missing feature matrix: {cache_path}")
+        xmat = np.nan_to_num(xmat)
+
+        if expected_trial_ids is not None:
+            expected = [int(t) for t in expected_trial_ids]
+            cache_trial_ids: Optional[List[int]] = None
+            if "trial_ids" in cache:
+                cache_trial_ids = [int(t) for t in np.asarray(cache["trial_ids"]).tolist()]
+
+            if cache_trial_ids is not None:
+                if len(cache_trial_ids) != int(xmat.shape[0]):
+                    print(
+                        f"{message_prefix}Cache mismatch: trial_ids length differs from feature rows; "
+                        "recomputing vectorization."
+                    )
+                elif cache_trial_ids != expected:
+                    print(
+                        f"{message_prefix}Cache mismatch: cached trial_ids differ from current trial_ids; "
+                        "recomputing vectorization."
+                    )
+                else:
+                    use_cache = True
+            else:
+                if int(xmat.shape[0]) != len(expected):
+                    print(
+                        f"{message_prefix}Cache mismatch: feature rows differ from current trials and "
+                        "cache has no trial_ids; recomputing vectorization."
+                    )
+                else:
+                    use_cache = True
+        else:
+            use_cache = True
+
+        if use_cache:
+            return xmat, "cache", cache_path
+
+    vec_out = create_vectorization(
+        barcodes,
+        method,
+        clip_frames=int(clip_frames),
+        output_folder=mouse_cache_dir,
+        cache_stem=cache_stem,
+        mouse_name=mouse_name,
+        labels=labels,
+        trial_ids=trial_ids,
+        valid_frames=valid_frames,
+    )
+    xmat = np.asarray(vec_out["features"])
+    return xmat, "computed", cache_path
 
 
 def _discover_mice(data_root: Path) -> List[str]:

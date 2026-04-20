@@ -26,19 +26,21 @@ matplotlib.use("Agg")
 
 import matplotlib.pyplot as plt
 import numpy as np
-from sklearn.linear_model import LogisticRegression
 from sklearn.metrics import ConfusionMatrixDisplay, confusion_matrix
-from sklearn.model_selection import StratifiedKFold, cross_val_predict, cross_validate
-from sklearn.pipeline import Pipeline
-from sklearn.preprocessing import StandardScaler
+from sklearn.model_selection import StratifiedKFold
+
+from classification_models import run_logreg_cv
 
 from utils import (
-    build_vectorization_cache_stem,
-    create_vectorization,
-    load_labelled_barcodes,
-    load_vectorization_cache,
+    _build_zz_folder,
     _discover_mice,
     _eligible_trials,
+    _opt_csv_list,
+    _opt_int,
+    _resolve_mouse_cache_dir,
+    _str2bool,
+    load_labelled_barcodes,
+    load_or_compute_vectorization_features,
 )
 
 
@@ -59,42 +61,6 @@ class RunState:
     max_trials: Optional[int]
 
 
-def _str2bool(value: str) -> bool:
-    v = value.strip().lower()
-    if v in {"1", "true", "t", "yes", "y", "on"}:
-        return True
-    if v in {"0", "false", "f", "no", "n", "off"}:
-        return False
-    raise argparse.ArgumentTypeError(f"Invalid boolean value: {value}")
-
-
-def _opt_int(value: str) -> Optional[int]:
-    if value is None:
-        return None
-    if value.strip().lower() in {"none", "null", ""}:
-        return None
-    return int(value)
-
-
-def _opt_csv_list(value: str) -> Optional[List[str]]:
-    if value is None:
-        return None
-    items = [x.strip() for x in value.split(",") if x.strip()]
-    return items if items else None
-
-
-def _build_zz_folder(p_active: int, per_trial_thresh: bool) -> str:
-    if per_trial_thresh:
-        return f"trials_zz-thresh-{p_active}-per-trial"
-    return f"trials_zz-thresh-{p_active}"
-
-
-def _resolve_mouse_cache_dir(state: RunState, mouse_name: str) -> Path:
-    if state.cache_dir is not None:
-        return state.cache_dir
-    return state.data_root / mouse_name / "cache"
-
-
 def _fit_within_mouse_classifier(
     xmat: np.ndarray, labels: np.ndarray, n_splits: int
 ) -> Tuple[Dict[str, float], np.ndarray, List[str], int]:
@@ -112,37 +78,10 @@ def _fit_within_mouse_classifier(
         )
 
     cv = StratifiedKFold(n_splits=folds, shuffle=True, random_state=42)
-    pipe = Pipeline(
-        [
-            ("scaler", StandardScaler()),
-            (
-                "clf",
-                LogisticRegression(
-                    max_iter=2000,
-                    random_state=42,
-                    class_weight="balanced",
-                ),
-            ),
-        ]
-    )
-
-    scores = cross_validate(
-        pipe,
-        xmat,
-        labels,
-        cv=cv,
-        scoring={"acc": "accuracy", "f1": "f1_macro"},
-    )
-    y_pred = cross_val_predict(pipe, xmat, labels, cv=cv)
+    splits = list(cv.split(np.zeros(len(labels)), labels))
+    metrics, y_pred = run_logreg_cv(xmat, labels, splits)
     label_order = sorted(unique_labels.tolist())
     cm = confusion_matrix(labels, y_pred, labels=label_order)
-
-    metrics = {
-        "mean_acc": float(scores["test_acc"].mean()),
-        "std_acc": float(scores["test_acc"].std()),
-        "mean_f1": float(scores["test_f1"].mean()),
-        "std_f1": float(scores["test_f1"].std()),
-    }
     return metrics, cm, label_order, folds
 
 
@@ -212,72 +151,23 @@ def run_pipeline(state: RunState) -> Dict[str, object]:
                 if clip_used is None:
                     clip_used = int(valid_frames.min())
 
-                cache_stem = build_vectorization_cache_stem(
+                vec_trial_ids = [int(t) for t in trial_ids]
+                xmat, source, cache_path = load_or_compute_vectorization_features(
+                    data_root=state.data_root,
                     mouse_name=mouse_name,
                     method=state.method,
                     p_active=state.p_active,
                     per_trial_thresh=state.per_trial_thresh,
-                    clip_frames=clip_used,
+                    clip_frames=int(clip_used),
+                    barcodes=barcodes,
+                    labels=labels,
+                    trial_ids=trial_ids,
+                    valid_frames=valid_frames,
+                    cache_dir=_resolve_mouse_cache_dir(state, mouse_name),
+                    force_recompute=state.force_recompute,
+                    expected_trial_ids=vec_trial_ids,
+                    message_prefix="  ",
                 )
-                mouse_cache_dir = _resolve_mouse_cache_dir(state, mouse_name)
-                mouse_cache_dir.mkdir(parents=True, exist_ok=True)
-                cache_path = mouse_cache_dir / f"{cache_stem}.npz"
-
-                vec_trial_ids = [int(t) for t in trial_ids]
-                use_cache = False
-                if cache_path.exists() and not state.force_recompute:
-                    cache = load_vectorization_cache(cache_path)
-                    if "features" in cache:
-                        xmat = np.asarray(cache["features"])
-                    elif "X" in cache:
-                        xmat = np.asarray(cache["X"])
-                    else:
-                        raise RuntimeError(f"Cache missing feature matrix: {cache_path}")
-                    xmat = np.nan_to_num(xmat)
-
-                    cache_trial_ids = None
-                    if "trial_ids" in cache:
-                        cache_trial_ids = [int(t) for t in np.asarray(cache["trial_ids"]).tolist()]
-
-                    if cache_trial_ids is not None:
-                        if len(cache_trial_ids) != int(xmat.shape[0]):
-                            print(
-                                "  Cache mismatch: trial_ids length differs from feature rows; "
-                                "recomputing vectorization."
-                            )
-                        elif cache_trial_ids != vec_trial_ids:
-                            print(
-                                "  Cache mismatch: cached trial_ids differ from current trial_ids; "
-                                "recomputing vectorization."
-                            )
-                        else:
-                            use_cache = True
-                    else:
-                        if int(xmat.shape[0]) != len(vec_trial_ids):
-                            print(
-                                "  Cache mismatch: feature rows differ from current trials and "
-                                "cache has no trial_ids; recomputing vectorization."
-                            )
-                        else:
-                            use_cache = True
-
-                    if use_cache:
-                        source = "cache"
-
-                if not use_cache:
-                    vec_out = create_vectorization(
-                        barcodes,
-                        state.method,
-                        clip_frames=clip_used,
-                        output_folder=mouse_cache_dir,
-                        cache_stem=cache_stem,
-                        mouse_name=mouse_name,
-                        labels=labels,
-                        trial_ids=trial_ids,
-                        valid_frames=valid_frames,
-                    )
-                    xmat = np.asarray(vec_out["features"])
-                    source = "computed"
 
                 metrics, cm, label_order, folds = _fit_within_mouse_classifier(
                     xmat,

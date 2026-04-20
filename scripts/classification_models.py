@@ -169,7 +169,7 @@ class CNN3D(nn.Module):
         return self.fc(x)
 
 
-def _infer_cnn1d_shape(feat_dim: int, clip_frames: int) -> Tuple[int, int]:
+def infer_cnn1d_shape(feat_dim: int, clip_frames: int) -> Tuple[int, int]:
     """Infer (channels, seq_len) for 1D CNN from feature dimension and clip frames."""
     if clip_frames > 0 and feat_dim % clip_frames == 0:
         return int(feat_dim // clip_frames), int(clip_frames)
@@ -230,7 +230,7 @@ def _build_train_val_indices(y_train: np.ndarray, seed: int) -> Tuple[Optional[n
     return np.asarray(train_idx), np.asarray(val_idx)
 
 
-def _train_eval_nn(
+def train_eval_nn(
     make_model: Callable,
     train_ds: Dataset,
     y_train: np.ndarray,
@@ -325,7 +325,7 @@ def _train_eval_nn(
     return metrics, pred
 
 
-def _train_eval_logreg(
+def train_eval_logreg(
     x_train: np.ndarray,
     y_train: np.ndarray,
     x_test: np.ndarray,
@@ -350,7 +350,7 @@ def _train_eval_logreg(
     return metrics, pred
 
 
-def _run_nn_cv(
+def run_nn_cv(
     make_model: Callable,
     train_dataset_builder: Callable,
     y_int: np.ndarray,
@@ -428,7 +428,7 @@ def _run_nn_cv(
     return metrics, oof_pred
 
 
-def _run_logreg_cv(
+def run_logreg_cv(
     x: np.ndarray,
     y: np.ndarray,
     splits: Sequence[Tuple[np.ndarray, np.ndarray]],
@@ -465,3 +465,5 @@ def _run_logreg_cv(
         "std_f1": float(np.std(fold_f1)),
     }
     return metrics, oof_pred
+
+

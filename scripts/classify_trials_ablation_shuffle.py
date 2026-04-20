@@ -23,6 +23,7 @@ from __future__ import annotations
 import argparse
 import copy
 import csv
+import gc
 import json
 import logging
 import random
@@ -50,20 +51,25 @@ from classification_models import (
     CNN3D,
     GridTrialDataset,
     VectorDataset,
-    _infer_cnn1d_shape,
-    _run_logreg_cv,
-    _run_nn_cv,
-    _train_eval_logreg,
+    run_logreg_cv,
+    run_nn_cv,
+    train_eval_logreg,
 )
 from shuffle_utils import (
     compute_threshold_from_grid_sample,
     compute_zigzag_from_grid,
+    shuffle_grid_phase,
     shuffle_grid_spatial_dimensions,
     shuffle_grid_time_dimension,
     validate_mice_for_ablation,
 )
 from utils import (
+    _build_zz_folder,
     _discover_mice,
+    _opt_csv_list,
+    _opt_int,
+    _resolve_mouse_cache_dir,
+    _str2bool,
     _short_mouse_name,
     build_vectorization_cache_stem,
     create_vectorization,
@@ -99,6 +105,7 @@ class RunState:
     shuffle_type: str
     skip_within_mouse: bool
     skip_cross_mouse: bool
+    skip_existing_shuffles: bool
     max_trials: Optional[int]
     batch_size_vec: int
     batch_size_grid: int
@@ -109,30 +116,7 @@ class RunState:
     seed: int
     device: str
     num_workers_dl: int
-
-
-def _str2bool(value: str) -> bool:
-    v = value.strip().lower()
-    if v in {"1", "true", "t", "yes", "y", "on"}:
-        return True
-    if v in {"0", "false", "f", "no", "n", "off"}:
-        return False
-    raise argparse.ArgumentTypeError(f"Invalid boolean value: {value}")
-
-
-def _opt_int(value: str) -> Optional[int]:
-    if value is None:
-        return None
-    if value.strip().lower() in {"none", "null", ""}:
-        return None
-    return int(value)
-
-
-def _opt_csv_list(value: str) -> Optional[List[str]]:
-    if value is None:
-        return None
-    items = [x.strip() for x in value.split(",") if x.strip()]
-    return items if items else None
+    max_dim: int
 
 
 def _resolve_device(name: str) -> torch.device:
@@ -155,10 +139,24 @@ def _set_seed(seed: int) -> None:
         torch.cuda.manual_seed_all(seed)
 
 
-def _resolve_mouse_cache_dir(state: RunState, mouse_name: str) -> Path:
-    if state.cache_dir is not None:
-        return state.cache_dir
-    return state.data_root / mouse_name / "cache"
+def _shuffle_cache_stem(base_stem: str, shuffle_type: str, shuffle_id: int) -> str:
+    """Build a deterministic cache stem that encodes shuffle type and iteration."""
+    return f"{base_stem}_{shuffle_type}_shuffle{shuffle_id:04d}"
+
+
+def _find_missing_shuffle_ids(
+    cache_dir: Path,
+    base_stem: str,
+    shuffle_type: str,
+    n_shuffles: int,
+) -> List[int]:
+    """Return the shuffle IDs whose vectorization cache does not yet exist."""
+    missing = []
+    for sid in range(n_shuffles):
+        stem = _shuffle_cache_stem(base_stem, shuffle_type, sid)
+        if not (cache_dir / f"{stem}.npz").exists():
+            missing.append(sid)
+    return missing
 
 
 def _build_parser() -> argparse.ArgumentParser:
@@ -187,9 +185,15 @@ def _build_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--shuffle-type",
         type=str,
-        choices=["time", "spatial"],
+        choices=["time", "spatial", "phase"],
         default="time",
-        help="Shuffle mode: 'time' permutes per-voxel time axis; 'spatial' permutes 3D positions and reuses mapping across frames",
+        help="Shuffle mode: 'time' permutes per-voxel time axis; 'spatial' permutes 3D positions and reuses mapping across frames; 'phase' applies FFT phase shifting",
+    )
+    parser.add_argument(
+        "--max-dim",
+        type=int,
+        default=2,
+        help="Maximum homology dimension for zigzag persistence (0=components, 1=loops, 2=voids)",
     )
     parser.add_argument(
         "--skip-within-mouse",
@@ -203,6 +207,12 @@ def _build_parser() -> argparse.ArgumentParser:
         default=False,
         help="Skip cross-mouse LOMO analysis",
     )
+    parser.add_argument(
+        "--skip-existing-shuffles",
+        type=_str2bool,
+        default=True,
+        help="If True, re-use already-cached shuffle vectorizations instead of recomputing (default True)",
+    )
 
     # Training parameters
     parser.add_argument("--batch-size-grid", type=int, default=16, help="Batch size for grid data")
@@ -215,12 +225,6 @@ def _build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--num-workers-dl", type=int, default=4, help="DataLoader workers")
 
     return parser
-
-
-def _build_zz_folder(p_active: int, per_trial_thresh: bool) -> str:
-    if per_trial_thresh:
-        return f"trials_zz-thresh-{p_active}-per-trial"
-    return f"trials_zz-thresh-{p_active}"
 
 
 def run_within_mouse_analysis(
@@ -266,7 +270,7 @@ def run_within_mouse_analysis(
             splits = list(cv.split(np.zeros(len(y_int)), y_int))
 
             # LogReg
-            logreg_metrics, logreg_pred = _run_logreg_cv(x_vec, y_int, splits)
+            logreg_metrics, logreg_pred = run_logreg_cv(x_vec, y_int, splits)
 
             # 3D-CNN
             grid_dataset = GridTrialDataset(
@@ -279,7 +283,7 @@ def run_within_mouse_analysis(
             def build_grid_dataset(train_idx: np.ndarray, val_idx: np.ndarray):
                 return Subset(grid_dataset, train_idx), Subset(grid_dataset, val_idx)
 
-            cnn3d_metrics, cnn3d_pred = _run_nn_cv(
+            cnn3d_metrics, cnn3d_pred = run_nn_cv(
                 make_model=lambda: CNN3D(
                     n_classes=len(class_labels),
                     in_channels=grid_dataset.in_channels,
@@ -409,7 +413,7 @@ def run_cross_mouse_analysis(
                 continue
 
             # LogReg
-            logreg_metrics, logreg_pred = _train_eval_logreg(train_x_vec, train_y, test_x_vec, test_y)
+            logreg_metrics, logreg_pred = train_eval_logreg(train_x_vec, train_y, test_x_vec, test_y)
 
             # 3D-CNN
             train_grid_ds = GridTrialDataset(
@@ -424,7 +428,7 @@ def run_cross_mouse_analysis(
                 valid_frames=test_grid_frames,
                 clip_frames=int(clip_used),
             )
-            cnn3d_metrics, cnn3d_pred = _run_nn_cv(
+            cnn3d_metrics, cnn3d_pred = run_nn_cv(
                 make_model=lambda: CNN3D(
                     n_classes=len(shared_labels),
                     in_channels=test_grid_ds.in_channels,
@@ -529,6 +533,50 @@ def run_pipeline(state: RunState) -> Dict[str, object]:
         all_within_cms: Dict[int, Dict[str, Dict[str, object]]] = {}
         all_cross_cms: Dict[int, Dict[str, Dict[str, object]]] = {}
 
+        # --- Determine global clip frames ONCE before the shuffle loop ---
+        if state.clip_frames is not None:
+            global_clip = int(state.clip_frames)
+        else:
+            print("\nPre-scanning valid_frames to determine global clip_frames ...")
+            min_frames_list: List[int] = []
+            for mouse_name in eligible_mice:
+                try:
+                    _, _, _, valid_frames_scan = load_labelled_barcodes(
+                        state.data_root,
+                        state.meta_root,
+                        mouse_name,
+                        state.zz_folder,
+                        max_trials=state.max_trials,
+                    )
+                    if len(valid_frames_scan) > 0:
+                        min_frames_list.append(int(valid_frames_scan.min()))
+                except Exception as exc:
+                    print(f"    Warning: could not pre-scan {mouse_name}: {exc}")
+            if not min_frames_list:
+                raise RuntimeError("Could not determine global clip_frames")
+            global_clip = min(min_frames_list)
+            print(f"  global_clip_frames={global_clip}")
+
+        # --- Report existing shuffle caches ---
+        print("\nChecking existing shuffle caches ...")
+        for mouse_name in eligible_mice:
+            mouse_cache_dir = _resolve_mouse_cache_dir(state, mouse_name)
+            base_stem = build_vectorization_cache_stem(
+                mouse_name=mouse_name,
+                method=state.vectorization_method,
+                p_active=state.p_active,
+                per_trial_thresh=state.per_trial_thresh,
+                clip_frames=global_clip,
+            )
+            missing = _find_missing_shuffle_ids(
+                mouse_cache_dir, base_stem, state.shuffle_type, state.n_shuffles
+            )
+            n_existing = state.n_shuffles - len(missing)
+            print(
+                f"  {mouse_name}: {n_existing}/{state.n_shuffles} cached"
+                + (f"; missing ids: {missing}" if missing else " (all present)")
+            )
+
         # Main shuffle loop
         for shuffle_id in range(state.n_shuffles):
             print(f"\n{'='*90}")
@@ -538,32 +586,8 @@ def run_pipeline(state: RunState) -> Dict[str, object]:
             shuffle_seed = state.seed + shuffle_id * 1000
             _set_seed(shuffle_seed)
 
-            # Determine global clip frames
-            if state.clip_frames is not None:
-                global_clip = int(state.clip_frames)
-            else:
-                print("\nPre-scanning valid_frames to determine global clip_frames ...")
-                min_frames_list: List[int] = []
-                for mouse_name in eligible_mice:
-                    try:
-                        _, _, _, valid_frames = load_labelled_barcodes(
-                            state.data_root,
-                            state.meta_root,
-                            mouse_name,
-                            state.zz_folder,
-                            max_trials=state.max_trials,
-                        )
-                        if len(valid_frames) > 0:
-                            min_frames_list.append(int(valid_frames.min()))
-                    except Exception as exc:
-                        print(f"    Warning: could not pre-scan {mouse_name}: {exc}")
-                if not min_frames_list:
-                    raise RuntimeError("Could not determine global clip_frames")
-                global_clip = min(min_frames_list)
-                print(f"  global_clip_frames={global_clip}")
-
-            # Load and shuffle grids for all mice
-            print(f"\nLoading grids and shuffling on {state.shuffle_type} dimension (seed={shuffle_seed}) ...")
+            # Load / compute shuffled vectorizations for all mice
+            print(f"\nPreparing shuffle {shuffle_id} ({state.shuffle_type}) ...")
             shuffled_grids_by_mouse: Dict[str, Dict[str, Any]] = {}
 
             for mouse_name in eligible_mice:
@@ -604,33 +628,8 @@ def run_pipeline(state: RunState) -> Dict[str, object]:
                     grid_paths_common = [grid_paths[i] for i in grid_take]
                     grid_frames_common = grid_valid_frames[grid_take]
 
-                    # Load, shuffle, and compute zigzag
-                    print(f"  {mouse_name}: loading/shuffling grids ...", end=" ", flush=True)
-
-                    grids_list: List[np.ndarray] = []
-                    for gpath in grid_paths_common:
-                        grid = np.load(gpath)
-                        if state.shuffle_type == "time":
-                            shuffled_grid = shuffle_grid_time_dimension(grid, seed=shuffle_seed)
-                        else:
-                            shuffled_grid = shuffle_grid_spatial_dimensions(grid, seed=shuffle_seed)
-                        grids_list.append(shuffled_grid)
-
-                    # Compute threshold
-                    threshold = compute_threshold_from_grid_sample(grid_paths_common, state.p_active, n_sample=min(5, len(grid_paths_common)))
-
-                    # Compute zigzag on shuffled grids
-                    barcodes_shuffled: List[List[Tuple[int, float, float]]] = []
-                    for grid in grids_list:
-                        try:
-                            bars = compute_zigzag_from_grid(grid, threshold=threshold, p_active=state.p_active)
-                            barcodes_shuffled.append(bars)
-                        except Exception as e:
-                            print(f"\n    Error computing zigzag for {mouse_name}: {e}")
-                            raise
-
-                    # Create vectorization
-                    cache_stem = build_vectorization_cache_stem(
+                    # Build cache path for this shuffle iteration
+                    base_stem = build_vectorization_cache_stem(
                         mouse_name=mouse_name,
                         method=state.vectorization_method,
                         p_active=state.p_active,
@@ -638,21 +637,88 @@ def run_pipeline(state: RunState) -> Dict[str, object]:
                         clip_frames=global_clip,
                     )
                     mouse_cache_dir = _resolve_mouse_cache_dir(state, mouse_name)
-                    cache_path = mouse_cache_dir / f"{cache_stem}_{state.shuffle_type}_shuffle{shuffle_id}.npz"
+                    mouse_cache_dir.mkdir(parents=True, exist_ok=True)
+                    shuffle_stem = _shuffle_cache_stem(base_stem, state.shuffle_type, shuffle_id)
+                    cache_path = mouse_cache_dir / f"{shuffle_stem}.npz"
 
+                    # --- Load from cache if available and not forcing recompute ---
+                    if cache_path.exists() and not state.force_recompute and state.skip_existing_shuffles:
+                        print(f"  {mouse_name}: loading cached shuffle {shuffle_id} ...", end=" ", flush=True)
+                        cached = load_vectorization_cache(cache_path)
+                        x_vec = np.nan_to_num(np.asarray(
+                            cached["features"] if "features" in cached else cached["X"]
+                        ))
+                        shuffled_grids_by_mouse[mouse_name] = {
+                            "barcodes": None,  # not needed for classification
+                            "labels": labels_common,
+                            "trial_ids": trial_ids[vec_take],
+                            "valid_frames": valid_frames[vec_take],
+                            "grid_paths": grid_paths_common,
+                            "x_vec": x_vec,
+                            "clip_used": global_clip,
+                            "cache_path": str(cache_path),
+                        }
+                        print(f"ok (cached, {len(x_vec)} trials)")
+                        continue
+
+                    # --- Otherwise: load grids one-by-one, shuffle, compute zigzag ---
+                    print(f"  {mouse_name}: shuffling + computing zigzag ...", end=" ", flush=True)
+
+                    # Compute threshold based on per_trial_thresh flag
+                    if state.per_trial_thresh:
+                        # Per-trial: will be computed inside loop for each grid
+                        threshold = None  # placeholder; computed per grid
+                    else:
+                        # Global: compute once before loop
+                        threshold = compute_threshold_from_grid_sample(
+                            grid_paths_common, state.p_active, n_sample=min(5, len(grid_paths_common))
+                        )
+
+                    barcodes_shuffled: List[List[Tuple[int, float, float]]] = []
+                    for gpath in grid_paths_common:
+                        grid = np.load(gpath)
+                        if state.shuffle_type == "time":
+                            shuffled_grid = shuffle_grid_time_dimension(grid, seed=shuffle_seed)
+                        elif state.shuffle_type == "spatial":
+                            shuffled_grid = shuffle_grid_spatial_dimensions(grid, seed=shuffle_seed)
+                        elif state.shuffle_type == "phase":
+                            shuffled_grid = shuffle_grid_phase(grid, seed=shuffle_seed)
+                        else:
+                            raise ValueError(f"Unknown shuffle_type: {state.shuffle_type}")
+                        
+                        try:
+                            # Recompute threshold per grid if per_trial_thresh=True
+                            if state.per_trial_thresh:
+                                grid_threshold = compute_threshold_from_grid_sample(
+                                    [gpath], state.p_active, n_sample=1
+                                )
+                            else:
+                                grid_threshold = threshold
+                            
+                            bars = compute_zigzag_from_grid(
+                                shuffled_grid, threshold=grid_threshold, p_active=state.p_active,
+                                max_dim=state.max_dim
+                            )
+                            barcodes_shuffled.append(bars)
+                        except Exception as e:
+                            print(f"\n    Error computing zigzag for {mouse_name}: {e}")
+                            raise
+                        finally:
+                            del grid, shuffled_grid  # free RAM immediately
+
+                    # Vectorize and **persist** to cache (never deleted)
                     vec_out = create_vectorization(
                         barcodes_shuffled,
                         state.vectorization_method,
                         clip_frames=global_clip,
                         output_folder=mouse_cache_dir,
-                        cache_stem=f"{cache_stem}_{state.shuffle_type}_shuffle{shuffle_id}",
+                        cache_stem=shuffle_stem,
                         mouse_name=mouse_name,
                         labels=labels_common,
                         trial_ids=trial_ids[vec_take],
                         valid_frames=valid_frames[vec_take],
                     )
-                    x_vec = np.asarray(vec_out["features"])
-                    x_vec = np.nan_to_num(x_vec)
+                    x_vec = np.nan_to_num(np.asarray(vec_out["features"]))
 
                     shuffled_grids_by_mouse[mouse_name] = {
                         "barcodes": barcodes_shuffled,
@@ -664,7 +730,7 @@ def run_pipeline(state: RunState) -> Dict[str, object]:
                         "clip_used": global_clip,
                         "cache_path": str(cache_path),
                     }
-                    print(f"ok ({len(barcodes_shuffled)} trials)")
+                    print(f"ok ({len(barcodes_shuffled)} trials, saved to cache)")
                 except Exception as exc:
                     print(f"FAILED: {exc}")
                     traceback.print_exc()
@@ -693,12 +759,8 @@ def run_pipeline(state: RunState) -> Dict[str, object]:
                 all_cross_results[shuffle_id] = cross_results
                 all_cross_cms[shuffle_id] = cross_cms
 
-            # Cleanup
-            print(f"\nCleaning up shuffled data for shuffle_id={shuffle_id} ...")
-            for mouse_name in eligible_mice_with_data:
-                cache_path = Path(shuffled_grids_by_mouse[mouse_name]["cache_path"])
-                if cache_path.exists():
-                    cache_path.unlink()
+            # Memory cleanup after each shuffle iteration
+            gc.collect()
 
         # Generate results and figures
         print(f"\n{'='*90}")
@@ -836,6 +898,7 @@ def main() -> None:
         shuffle_type=args.shuffle_type,
         skip_within_mouse=args.skip_within_mouse,
         skip_cross_mouse=args.skip_cross_mouse,
+        skip_existing_shuffles=args.skip_existing_shuffles,
         max_trials=args.max_trials,
         batch_size_vec=16,  # Not used in shuffle ablation
         batch_size_grid=args.batch_size_grid,
@@ -846,6 +909,7 @@ def main() -> None:
         seed=args.seed,
         device=args.device,
         num_workers_dl=args.num_workers_dl,
+        max_dim=args.max_dim,
     )
 
     try:

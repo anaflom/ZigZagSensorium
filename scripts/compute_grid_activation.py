@@ -28,12 +28,13 @@ import numpy as np
 import pandas as pd
 
 from utils import (
-    load_trial_metadata,
+    _opt_csv_list,
     _discover_mice,
-    _to_bool_series,
-    _eligible_trials,
     _extract_trial_id_from_name,
+    _eligible_trials,
     _resolve_trial_response_file,
+    _to_bool_series,
+    load_trial_metadata,
 )
 
 
@@ -54,13 +55,6 @@ class RunState:
 def _default_fortran_source() -> Path:
     """Return default assign_grid.f90 next to this script."""
     return Path(__file__).resolve().parent / "assign_grid.f90"
-
-
-def _opt_csv_list(value: str) -> Optional[List[str]]:
-    if value is None:
-        return None
-    items = [x.strip() for x in value.split(",") if x.strip()]
-    return items if items else None
 
 
 def _normalization_token(normalization: Optional[str]) -> str:

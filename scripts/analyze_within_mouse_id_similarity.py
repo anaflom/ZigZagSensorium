@@ -5,15 +5,15 @@
 # SPDX-License-Identifier: BSD-3-Clause
 
 """
-Analyze ID-based clustering of repeated trials using zigzag vectorizations.
+Analyze within-mouse trial similarity based on repeated stimulus IDs.
 
 For each mouse and label independently:
 1. Filter trials to only those with repeated IDs (ID appearing >= min_id_repetitions)
-2. Normalize vectors and reduce dimensionality with PCA (per label)
-3. Cluster with hierarchical clustering (Ward linkage, Euclidean distance)
-4. Evaluate clustering via Adjusted Rand Index (ARI) with bootstrap resampling
-5. Compute distance matrices and generate visualizations
-6. Export results (ARI, distances, plots)
+2. Normalize vectors and optionally reduce dimensionality with PCA (per label)
+3. Compute trial-level distance matrices (pairwise Euclidean distances)
+4. Aggregate distances by stimulus ID to create ID-to-ID similarity matrix
+5. Generate visualizations (per-trial heatmap, ID-to-ID heatmap, distance distributions)
+6. Export results (distances, plots, summary)
 """
 
 from __future__ import annotations
@@ -36,9 +36,7 @@ import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
 from scipy.spatial.distance import pdist, squareform
-from sklearn.cluster import AgglomerativeClustering
 from sklearn.decomposition import PCA
-from sklearn.metrics import adjusted_rand_score
 from sklearn.preprocessing import StandardScaler
 
 from utils import (
@@ -70,9 +68,22 @@ class RunState:
     force_recompute: bool
     max_trials: Optional[int]
     min_id_repetitions: int
-    n_pca_components: int
-    n_resamplings: int
+    n_pca_components: Optional[int]
     seed: int
+
+
+def _opt_none_or_int(value: str) -> Optional[int]:
+    """Convert string to None or int.
+    
+    Accepts:
+    - "None", "none", "null", "NULL" -> None
+    - Any integer string -> int(value)
+    """
+    if isinstance(value, str) and value.lower() in ("none", "null"):
+        return None
+    if value is None:
+        return None
+    return int(value)
 
 
 def parse_arguments() -> argparse.Namespace:
@@ -120,7 +131,7 @@ def parse_arguments() -> argparse.Namespace:
         help="Comma-separated mouse names (default: all discovered)",
     )
 
-    # Clustering parameters
+    # Analysis parameters
     parser.add_argument(
         "--min-id-repetitions",
         type=int,
@@ -129,15 +140,9 @@ def parse_arguments() -> argparse.Namespace:
     )
     parser.add_argument(
         "--n-pca-components",
-        type=int,
+        type=_opt_none_or_int,
         default=10,
-        help="Number of PCA components per label (default 10)",
-    )
-    parser.add_argument(
-        "--n-resamplings",
-        type=int,
-        default=50,
-        help="Number of bootstrap resamplings for ARI evaluation (default 50)",
+        help="Number of PCA components per label, or 'None' to skip PCA (default 10)",
     )
 
     # Random seed
@@ -182,9 +187,10 @@ def prepare_label_data(
     trial_ids: List[int],
     df_meta_filtered: pd.DataFrame,
     label: str,
+    n_pca_components: Optional[int],
     seed: int,
 ) -> Optional[Dict[str, Any]]:
-    """Prepare data for a single label: filter, normalize, PCA.
+    """Prepare data for a single label: filter, normalize, optional PCA.
     
     Args:
         xmat: Feature matrix (n_samples x n_features)
@@ -192,10 +198,11 @@ def prepare_label_data(
         trial_ids: List of trial IDs corresponding to xmat rows
         df_meta_filtered: Filtered metadata with ID column
         label: Label value to filter to
+        n_pca_components: Number of PCA components, or None to skip PCA
         seed: Random seed for PCA
         
     Returns:
-        Dict with 'X_pca', 'X_normalized', 'id_labels', 'trial_ids_label' or None if insufficient data
+        Dict with 'X_pca' (or 'X_normalized' if no PCA), 'id_labels', 'trial_ids_label' or None if insufficient data
     """
     # Filter to this label
     mask_label = labels == label
@@ -236,89 +243,93 @@ def prepare_label_data(
     norms[norms == 0] = 1.0
     X_normed = X_scaled / norms
     
-    # PCA (per label)
-    n_components = min(10, X_normed.shape[0], X_normed.shape[1])
-    pca = PCA(n_components=n_components, random_state=seed)
-    X_pca = pca.fit_transform(X_normed)
+    # PCA (per label) - optional
+    if n_pca_components is not None:
+        n_components = min(n_pca_components, X_normed.shape[0], X_normed.shape[1])
+        pca = PCA(n_components=n_components, random_state=seed)
+        X_reduced = pca.fit_transform(X_normed)
+    else:
+        X_reduced = X_normed
+        pca = None
     
     return {
-        "X_pca": X_pca,
+        "X_reduced": X_reduced,
         "X_normalized": X_normed,
         "id_labels": id_labels,
         "trial_ids_label": trial_ids_label,
         "pca_model": pca,
+        "was_pca_applied": n_pca_components is not None,
     }
 
 
-def evaluate_ari_with_resampling(
-    X_pca: np.ndarray,
-    id_labels: np.ndarray,
-    n_clusters: int,
-    n_resamplings: int,
-    seed: int,
-) -> np.ndarray:
-    """Evaluate ARI via bootstrap resampling and clustering with varying random_state.
-    
-    Args:
-        X_pca: PCA-reduced feature matrix (n_samples x n_components)
-        id_labels: Ground-truth ID labels (n_samples,)
-        n_clusters: Number of clusters (= number of unique IDs)
-        n_resamplings: Number of bootstrap resamplings
-        seed: Base random seed
-        
-    Returns:
-        Array of ARI values (length n_resamplings)
-    """
-    ari_values = []
-    rng = np.random.default_rng(seed)
-    
-    for resample_idx in range(n_resamplings):
-        # Bootstrap: resample trials with replacement
-        indices = rng.choice(len(X_pca), size=len(X_pca), replace=True)
-        X_boot = X_pca[indices]
-        id_boot = id_labels[indices]
-        
-        # Cluster with varying random_state
-        cluster_seed = seed + resample_idx
-        clusterer = AgglomerativeClustering(
-            n_clusters=n_clusters,
-            linkage="ward",
-            metric="euclidean",
-        )
-        # Note: AgglomerativeClustering doesn't have random_state, only fit is deterministic
-        # We use the seed to control initial state if needed, but linkage is deterministic
-        predicted_clusters = clusterer.fit_predict(X_boot)
-        
-        # Compute ARI
-        ari = adjusted_rand_score(id_boot, predicted_clusters)
-        ari_values.append(ari)
-    
-    return np.array(ari_values)
-
-
 def compute_distance_matrix(
-    X_pca: np.ndarray,
+    X_reduced: np.ndarray,
 ) -> np.ndarray:
-    """Compute pairwise Euclidean distances in PCA space.
+    """Compute pairwise Euclidean distances.
     
     Args:
-        X_pca: PCA-reduced feature matrix
+        X_reduced: Feature matrix (n_samples x n_features), either PCA-reduced or normalized
         
     Returns:
         Distance matrix (n_samples x n_samples)
     """
-    dist_condensed = pdist(X_pca, metric="euclidean")
+    dist_condensed = pdist(X_reduced, metric="euclidean")
     dist_matrix = squareform(dist_condensed)
     return dist_matrix
 
 
-def plot_heatmap_with_clustering(
+def compute_id_aggregated_distance_matrix(
+    dist_matrix: np.ndarray,
+    id_labels: np.ndarray,
+    trial_ids: List[int],
+) -> Tuple[np.ndarray, np.ndarray]:
+    """Aggregate trial-level distances to ID-level distance matrix.
+    
+    For each pair of unique IDs, compute the mean distance between all trials
+    with those IDs.
+    
+    Args:
+        dist_matrix: Trial-level distance matrix (n_trials x n_trials)
+        id_labels: ID label for each trial (n_trials,)
+        trial_ids: Trial IDs (n_trials,)
+        
+    Returns:
+        Tuple of (ID_distance_matrix, unique_ids) where:
+        - ID_distance_matrix: (n_unique_ids x n_unique_ids) symmetric distance matrix
+        - unique_ids: sorted array of unique ID values
+    """
+    unique_ids = np.sort(np.unique(id_labels))
+    n_ids = len(unique_ids)
+    
+    # Map ID values to indices
+    id_to_idx = {id_val: idx for idx, id_val in enumerate(unique_ids)}
+    
+    # Initialize ID-level distance matrix
+    id_dist_matrix = np.zeros((n_ids, n_ids))
+    
+    # For each pair of IDs, compute mean distance
+    for i, id_i in enumerate(unique_ids):
+        for j, id_j in enumerate(unique_ids):
+            # Get indices of trials with these IDs
+            indices_i = np.where(id_labels == id_i)[0]
+            indices_j = np.where(id_labels == id_j)[0]
+            
+            # Extract distances between these trial pairs
+            distances = dist_matrix[np.ix_(indices_i, indices_j)].flatten()
+            
+            # Store mean distance
+            id_dist_matrix[i, j] = np.mean(distances)
+    
+    return id_dist_matrix, unique_ids
+
+
+def plot_trial_heatmap_with_clustering(
     dist_matrix: np.ndarray,
     id_labels: np.ndarray,
     trial_ids: List[int],
     output_path: Path,
 ) -> None:
-    """Plot distance matrix heatmap with trials ordered by ID.
+    """Plot trial-level distance matrix heatmap with trials ordered by ID.
     
     Args:
         dist_matrix: Distance matrix (n_samples x n_samples)
@@ -332,10 +343,48 @@ def plot_heatmap_with_clustering(
     
     fig, ax = plt.subplots(figsize=(12, 10))
     im = ax.imshow(dist_sorted, cmap="viridis", aspect="auto")
-    ax.set_title("Distance Matrix (ordered by ID)")
+    ax.set_title("Trial-Level Distance Matrix (ordered by ID)")
     ax.set_xlabel("Trial (sorted by ID)")
     ax.set_ylabel("Trial (sorted by ID)")
     plt.colorbar(im, ax=ax, label="Euclidean Distance")
+    
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    plt.savefig(output_path, dpi=100, bbox_inches="tight")
+    plt.close()
+
+
+def plot_id_distance_heatmap(
+    id_dist_matrix: np.ndarray,
+    unique_ids: np.ndarray,
+    output_path: Path,
+) -> None:
+    """Plot ID-aggregated distance matrix heatmap.
+    
+    Args:
+        id_dist_matrix: ID-level distance matrix (n_unique_ids x n_unique_ids)
+        unique_ids: Unique ID values (n_unique_ids,)
+        output_path: Path to save figure
+    """
+    n_ids = len(unique_ids)
+    
+    fig, ax = plt.subplots(figsize=(10, 8))
+    im = ax.imshow(id_dist_matrix, cmap="viridis", aspect="auto")
+    
+    # Set ticks and labels
+    ax.set_xticks(np.arange(n_ids))
+    ax.set_yticks(np.arange(n_ids))
+    ax.set_xticklabels(unique_ids, rotation=45, ha="right")
+    ax.set_yticklabels(unique_ids)
+    
+    ax.set_title("ID-Aggregated Distance Matrix (mean distances between ID pairs)")
+    ax.set_xlabel("Stimulus ID")
+    ax.set_ylabel("Stimulus ID")
+    plt.colorbar(im, ax=ax, label="Mean Euclidean Distance")
+    
+    # Add grid
+    ax.set_xticks(np.arange(n_ids) - 0.5, minor=True)
+    ax.set_yticks(np.arange(n_ids) - 0.5, minor=True)
+    ax.grid(which="minor", color="gray", linestyle="-", linewidth=0.5, alpha=0.3)
     
     output_path.parent.mkdir(parents=True, exist_ok=True)
     plt.savefig(output_path, dpi=100, bbox_inches="tight")
@@ -373,7 +422,7 @@ def plot_boxplot_distances_by_id(
     for patch, color in zip(bp["boxes"], ["lightgreen", "lightcoral"]):
         patch.set_facecolor(color)
     
-    ax.set_ylabel("Euclidean Distance (PCA space)")
+    ax.set_ylabel("Euclidean Distance")
     ax.set_title("Distribution of Distances by ID Relationship")
     ax.grid(axis="y", alpha=0.3)
     
@@ -382,37 +431,13 @@ def plot_boxplot_distances_by_id(
     plt.close()
 
 
-def plot_ari_distribution(
-    ari_values: np.ndarray,
-    output_path: Path,
-) -> None:
-    """Plot distribution of ARI values across resamplings.
-    
-    Args:
-        ari_values: Array of ARI values
-        output_path: Path to save figure
-    """
-    fig, ax = plt.subplots(figsize=(10, 6))
-    ax.hist(ari_values, bins=20, alpha=0.7, color="steelblue", edgecolor="black")
-    ax.axvline(ari_values.mean(), color="red", linestyle="--", linewidth=2, label=f"Mean: {ari_values.mean():.3f}")
-    ax.set_xlabel("Adjusted Rand Index")
-    ax.set_ylabel("Frequency")
-    ax.set_title(f"ARI Distribution (N={len(ari_values)} resamplings)")
-    ax.legend()
-    ax.grid(axis="y", alpha=0.3)
-    
-    output_path.parent.mkdir(parents=True, exist_ok=True)
-    plt.savefig(output_path, dpi=100, bbox_inches="tight")
-    plt.close()
-
-
-def export_distance_matrix_csv(
+def export_trial_distance_matrix_csv(
     dist_matrix: np.ndarray,
     trial_ids: List[int],
     id_labels: np.ndarray,
     output_path: Path,
 ) -> None:
-    """Export distance matrix to tidy CSV format.
+    """Export trial-level distance matrix to tidy CSV format.
     
     Args:
         dist_matrix: Distance matrix
@@ -436,14 +461,31 @@ def export_distance_matrix_csv(
     df.to_csv(output_path, index=False)
 
 
+def export_id_distance_matrix_csv(
+    id_dist_matrix: np.ndarray,
+    unique_ids: np.ndarray,
+    output_path: Path,
+) -> None:
+    """Export ID-aggregated distance matrix to CSV format.
+    
+    Args:
+        id_dist_matrix: ID-level distance matrix
+        unique_ids: Unique ID values
+        output_path: Path to save CSV
+    """
+    df = pd.DataFrame(id_dist_matrix, index=unique_ids, columns=unique_ids)
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    df.to_csv(output_path)
+
+
 def run_pipeline(state: RunState) -> Dict[str, Any]:
-    """Main analysis pipeline: per-mouse, per-label clustering and distance analysis."""
+    """Main analysis pipeline: per-mouse, per-label similarity analysis."""
     
     output_folder = state.output_folder
     output_folder.mkdir(parents=True, exist_ok=True)
     
     print(f"\n{'='*70}")
-    print(f"Analysis: ID-based Trial Clustering")
+    print(f"Analysis: Within-Mouse Trial Similarity by Stimulus ID")
     print(f"{'='*70}")
     print(f"Started: {datetime.now().isoformat()}")
     print(f"Output folder: {output_folder}")
@@ -452,8 +494,7 @@ def run_pipeline(state: RunState) -> Dict[str, Any]:
     print(f"P-active: {state.p_active}")
     print(f"Vectorization method: {state.method}")
     print(f"Min ID repetitions: {state.min_id_repetitions}")
-    print(f"N PCA components: {state.n_pca_components}")
-    print(f"N resamplings: {state.n_resamplings}")
+    print(f"N PCA components: {state.n_pca_components if state.n_pca_components is not None else 'None (PCA disabled)'}")
     print(f"Seed: {state.seed}")
     
     # Discover mice
@@ -549,65 +590,60 @@ def run_pipeline(state: RunState) -> Dict[str, Any]:
                 try:
                     # Prepare label-specific data
                     label_data = prepare_label_data(
-                        xmat, labels, trial_ids, df_meta_filtered, label, state.seed
+                        xmat, labels, trial_ids, df_meta_filtered, label,
+                        state.n_pca_components, state.seed
                     )
                     
                     if label_data is None:
                         print(f"      Insufficient data for label. Skipping.")
                         continue
                     
-                    X_pca = label_data["X_pca"]
+                    X_reduced = label_data["X_reduced"]
                     id_labels = label_data["id_labels"]
                     trial_ids_label = label_data["trial_ids_label"]
+                    was_pca_applied = label_data["was_pca_applied"]
                     
                     n_unique_ids = len(np.unique(id_labels))
                     print(f"      Trials: {len(trial_ids_label)}, Unique IDs: {n_unique_ids}")
+                    print(f"      Feature dimensionality: {X_reduced.shape[1]} ({('PCA-reduced' if was_pca_applied else 'normalized')})")
                     
                     if n_unique_ids < 2:
                         print(f"      Only one unique ID. Skipping.")
                         continue
                     
-                    if len(X_pca) < n_unique_ids:
-                        print(f"      Insufficient trials ({len(X_pca)}) for clusters ({n_unique_ids}). Skipping.")
-                        continue
+                    # Compute trial-level distance matrix
+                    dist_matrix = compute_distance_matrix(X_reduced)
                     
-                    # Evaluate ARI
-                    print(f"      Evaluating ARI with {state.n_resamplings} resamplings...")
-                    ari_values = evaluate_ari_with_resampling(
-                        X_pca, id_labels, n_unique_ids, state.n_resamplings, state.seed
+                    # Compute ID-aggregated distance matrix
+                    id_dist_matrix, unique_ids = compute_id_aggregated_distance_matrix(
+                        dist_matrix, id_labels, trial_ids_label
                     )
-                    
-                    print(f"      ARI: mean={ari_values.mean():.3f}, std={ari_values.std():.3f}")
-                    
-                    # Compute distance matrix
-                    dist_matrix = compute_distance_matrix(X_pca)
                     
                     # Create output folder
                     label_out_folder.mkdir(parents=True, exist_ok=True)
                     
-                    # Export ARI results
-                    ari_csv_path = label_out_folder / "ari_resamples.csv"
-                    df_ari = pd.DataFrame({"ari": ari_values})
-                    df_ari.to_csv(ari_csv_path, index=False)
-                    print(f"      Saved ARI results: {ari_csv_path}")
+                    # Export trial distances
+                    trial_dist_csv_path = label_out_folder / "trial_distances.csv"
+                    export_trial_distance_matrix_csv(dist_matrix, trial_ids_label, id_labels, trial_dist_csv_path)
+                    print(f"      Saved trial distances: {trial_dist_csv_path}")
                     
-                    # Export distance matrix
-                    dist_csv_path = label_out_folder / "distances.csv"
-                    export_distance_matrix_csv(dist_matrix, trial_ids_label, id_labels, dist_csv_path)
-                    print(f"      Saved distance matrix: {dist_csv_path}")
+                    # Export ID distances
+                    id_dist_csv_path = label_out_folder / "id_distances.csv"
+                    export_id_distance_matrix_csv(id_dist_matrix, unique_ids, id_dist_csv_path)
+                    print(f"      Saved ID distances: {id_dist_csv_path}")
                     
                     # Generate plots
-                    heatmap_path = label_out_folder / "heatmap.png"
-                    plot_heatmap_with_clustering(dist_matrix, id_labels, trial_ids_label, heatmap_path)
-                    print(f"      Saved heatmap: {heatmap_path}")
+                    trial_heatmap_path = label_out_folder / "trial_heatmap.png"
+                    plot_trial_heatmap_with_clustering(dist_matrix, id_labels, trial_ids_label, trial_heatmap_path)
+                    print(f"      Saved trial heatmap: {trial_heatmap_path}")
+                    
+                    id_heatmap_path = label_out_folder / "id_distance_heatmap.png"
+                    plot_id_distance_heatmap(id_dist_matrix, unique_ids, id_heatmap_path)
+                    print(f"      Saved ID distance heatmap: {id_heatmap_path}")
                     
                     boxplot_path = label_out_folder / "boxplot_distances.png"
                     plot_boxplot_distances_by_id(dist_matrix, id_labels, boxplot_path)
                     print(f"      Saved boxplot: {boxplot_path}")
-                    
-                    ari_dist_path = label_out_folder / "ari_distribution.png"
-                    plot_ari_distribution(ari_values, ari_dist_path)
-                    print(f"      Saved ARI distribution: {ari_dist_path}")
                     
                     # Create summary row
                     summary_rows.append({
@@ -615,11 +651,8 @@ def run_pipeline(state: RunState) -> Dict[str, Any]:
                         "label": label,
                         "n_trials": len(trial_ids_label),
                         "n_unique_ids": n_unique_ids,
-                        "n_clusters": n_unique_ids,
-                        "mean_ari": ari_values.mean(),
-                        "std_ari": ari_values.std(),
-                        "min_ari": ari_values.min(),
-                        "max_ari": ari_values.max(),
+                        "dimensionality": X_reduced.shape[1],
+                        "pca_applied": was_pca_applied,
                     })
                     
                 except Exception as exc:
@@ -670,7 +703,6 @@ def main() -> int:
             max_trials=args.max_trials,
             min_id_repetitions=args.min_id_repetitions,
             n_pca_components=args.n_pca_components,
-            n_resamplings=args.n_resamplings,
             seed=args.seed,
         )
         

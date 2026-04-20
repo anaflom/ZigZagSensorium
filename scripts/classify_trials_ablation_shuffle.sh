@@ -9,7 +9,7 @@
 #SBATCH --account=MDMC
 #SBATCH --gres=gpu:V100:1
 #SBATCH --cpus-per-task=8
-#SBATCH --mem=120G
+#SBATCH --mem=200G
 #SBATCH --time=12:00:00
 #SBATCH --output=logs/slurm-zz-ablation-shuffle-%j.out
 #SBATCH --error=logs/slurm-zz-ablation-shuffle-%j.err
@@ -62,7 +62,7 @@ P_ACTIVE="${P_ACTIVE:-30}"
 PER_TRIAL_THRESH="${PER_TRIAL_THRESH:-true}"
 VECTORIZATION_METHOD="${VECTORIZATION_METHOD:-Turnover}"
 MICE="${MICE:-None}"
-CLIP_FRAMES="${CLIP_FRAMES:-None}"
+CLIP_FRAMES="${CLIP_FRAMES:-240}"
 GRID_SUBDIR="${GRID_SUBDIR:-trials_grid}"
 MAX_TRIALS="${MAX_TRIALS:-None}"
 
@@ -72,9 +72,11 @@ FORCE_RECOMPUTE="${FORCE_RECOMPUTE:-false}"
 
 # Shuffle parameters
 N_SHUFFLES="${N_SHUFFLES:-3}"
-SHUFFLE_TYPE="${SHUFFLE_TYPE:-spatial}"
+SHUFFLE_TYPE="${SHUFFLE_TYPE:-time}"
+MAX_DIM="${MAX_DIM:-2}"
 SKIP_WITHIN_MOUSE="${SKIP_WITHIN_MOUSE:-false}"
 SKIP_CROSS_MOUSE="${SKIP_CROSS_MOUSE:-false}"
+SKIP_EXISTING_SHUFFLES="${SKIP_EXISTING_SHUFFLES:-false}"
 
 # Training parameters (3D-CNN only for shuffle ablations)
 BATCH_SIZE_GRID="${BATCH_SIZE_GRID:-16}"
@@ -136,8 +138,10 @@ echo "FORCE_RECOMPUTE: ${FORCE_RECOMPUTE}"
 echo "==========================================="
 echo "N_SHUFFLES: ${N_SHUFFLES}"
 echo "SHUFFLE_TYPE: ${SHUFFLE_TYPE}"
+echo "MAX_DIM: ${MAX_DIM}"
 echo "SKIP_WITHIN_MOUSE: ${SKIP_WITHIN_MOUSE}"
 echo "SKIP_CROSS_MOUSE: ${SKIP_CROSS_MOUSE}"
+echo "SKIP_EXISTING_SHUFFLES: ${SKIP_EXISTING_SHUFFLES}"
 echo "==========================================="
 echo "BATCH_SIZE_GRID: ${BATCH_SIZE_GRID}"
 echo "EPOCHS_CNN3D: ${EPOCHS_CNN3D}"
@@ -161,6 +165,7 @@ CMD=(
   --grid-subdir "${GRID_SUBDIR}"
   --n-shuffles "${N_SHUFFLES}"
   --shuffle-type "${SHUFFLE_TYPE}"
+  --max-dim "${MAX_DIM}"
   --batch-size-grid "${BATCH_SIZE_GRID}"
   --epochs-cnn3d "${EPOCHS_CNN3D}"
   --lr-cnn3d "${LR_CNN3D}"
@@ -177,8 +182,10 @@ if [[ -n "${CACHE_DIR}" ]]; then
 fi
 
 if [[ "${FORCE_RECOMPUTE}" == "true" || "${FORCE_RECOMPUTE}" == "1" ]]; then
-  CMD+=(--force-recompute)
+  CMD+=(--force-recompute true)
 fi
+
+CMD+=(--skip-existing-shuffles "${SKIP_EXISTING_SHUFFLES}")
 
 if [[ "${SKIP_WITHIN_MOUSE}" == "true" || "${SKIP_WITHIN_MOUSE}" == "1" ]]; then
   CMD+=(--skip-within-mouse)

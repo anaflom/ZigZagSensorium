@@ -61,7 +61,7 @@ OUTPUT_BASE="${OUTPUT_BASE:-${PROJECT_DIR}/results/vectorizations/p${P_ACTIVE}-$
 # Use literal "None" to trigger auto behavior.
 REF_MOUSE="${REF_MOUSE:-None}"
 MOUSE_2="${MOUSE_2:-None}"
-CLIP_FRAMES="${CLIP_FRAMES:-None}"
+CLIP_FRAMES="${CLIP_FRAMES:-240}"
 
 # Comma-separated subset of: 3,4,5,6,7,7b,8 (section 2 always runs)
 SKIP_SECTIONS="${SKIP_SECTIONS:-}"

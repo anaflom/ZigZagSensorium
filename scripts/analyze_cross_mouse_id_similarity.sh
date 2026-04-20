@@ -4,7 +4,7 @@
 #
 # SPDX-License-Identifier: BSD-3-Clause
 
-#SBATCH --job-name=zz-repeated-id-clustering
+#SBATCH --job-name=zz-cross-mouse-id-sim
 #SBATCH --partition=GENOA
 #SBATCH --account=MDMC
 #SBATCH --nodes=1
@@ -12,36 +12,35 @@
 #SBATCH --cpus-per-task=8
 #SBATCH --mem=80G
 #SBATCH --time=6:00:00
-#SBATCH --output=logs/slurm-zz-repeated-id-clustering-%j.out
-#SBATCH --error=logs/slurm-zz-repeated-id-clustering-%j.err
+#SBATCH --output=logs/slurm-zz-cross-mouse-id-sim-%j.out
+#SBATCH --error=logs/slurm-zz-cross-mouse-id-sim-%j.err
 
 # ============================================================================
-# Repeated-ID clustering analysis using zigzag vectorizations (SLURM).
+# Cross-mouse ID similarity analysis using zigzag vectorizations (SLURM).
 #
-# For each selected mouse and for each label independently:
-#   1. Keep eligible trials only (valid_trial AND valid_response)
-#   2. Keep repeated IDs only (ID count >= MIN_ID_REPETITIONS)
-#   3. Vectorize zigzag barcodes
-#   4. Preprocess: StandardScaler + L2 normalization + PCA
-#   5. Cluster with Ward linkage (Euclidean)
-#   6. Evaluate ARI over N_RESAMPLINGS bootstrap iterations
-#   7. Save ARI CSVs, distance CSVs, heatmaps, and boxplots
+# For each pair of mice sharing common stimulus IDs (after eligibility +
+# repetition filtering):
+#   1. Vectorize zigzag barcodes
+#   2. Preprocess: StandardScaler + L2 normalization + PCA (jointly per label)
+#   3. Compute within-m1, within-m2, and cross-mouse distance matrices
+#   4. Plot combined heatmap + violin/boxplot per label
+#   5. Export distances.csv + summary.csv
 #
 # Usage examples:
-#   sbatch scripts/analyze_repeated_trial_clustering.sh
+#   sbatch scripts/analyze_cross_mouse_id_similarity.sh
 #
-#   sbatch --export=MICE=dynamic29156-11-10-Video-8744edeac3b4d1ce16b680916b5267ce,N_RESAMPLINGS=100 \
-#          scripts/analyze_repeated_trial_clustering.sh
+#   sbatch --export=MICE=dynamic29156-11-10-Video-8744edeac3b4d1ce16b680916b5267ce,VECTORIZATION_METHOD=Turnover \
+#          scripts/analyze_cross_mouse_id_similarity.sh
 #
-#   sbatch --export=VECTORIZATION_METHOD=Turnover,MIN_ID_REPETITIONS=7,N_PCA_COMPONENTS=10 \
-#          scripts/analyze_repeated_trial_clustering.sh
+#   sbatch --export=MIN_ID_REPETITIONS=5,N_PCA_COMPONENTS=15 \
+#          scripts/analyze_cross_mouse_id_similarity.sh
 # ============================================================================
 
 set -euo pipefail
 
 # --- Configuration -----------------------------------------------------------
 PROJECT_DIR="/u/mdmc/anaflom/projects_mdmc/ZigZagSensorium"
-SCRIPT="${PROJECT_DIR}/scripts/analyze_repeated_trial_clustering.py"
+SCRIPT="${PROJECT_DIR}/scripts/analyze_cross_mouse_id_similarity.py"
 VENV_DIR="${PROJECT_DIR}/.venv-genoa"
 
 DATA_ROOT="${DATA_ROOT:-/orfeo/scratch/area/ygardinazzi/sensorium_2026/derivatives/grid-15x15x10_norm-by_minmax}"
@@ -58,7 +57,6 @@ MAX_TRIALS="${MAX_TRIALS:-None}"
 # Analysis parameters
 MIN_ID_REPETITIONS="${MIN_ID_REPETITIONS:-7}"
 N_PCA_COMPONENTS="${N_PCA_COMPONENTS:-10}"
-N_RESAMPLINGS="${N_RESAMPLINGS:-50}"
 SEED="${SEED:-42}"
 
 # Cache
@@ -72,10 +70,10 @@ else
   OUTPUT_SUFFIX="global"
 fi
 
-OUTPUT_BASE="${OUTPUT_BASE:-${PROJECT_DIR}/results/clustering_repeated_trials/p${P_ACTIVE}-${OUTPUT_SUFFIX}}"
+OUTPUT_BASE="${OUTPUT_BASE:-${PROJECT_DIR}/results/cross_mouse_id_similarity/p${P_ACTIVE}-${OUTPUT_SUFFIX}}"
 
 RUN_TS="$(date +%Y%m%d_%H%M%S)"
-RUN_TAG="p${P_ACTIVE}_method-${VECTORIZATION_METHOD}_minrep-${MIN_ID_REPETITIONS}_pca-${N_PCA_COMPONENTS}_resamp-${N_RESAMPLINGS}_${RUN_TS}"
+RUN_TAG="p${P_ACTIVE}_method-${VECTORIZATION_METHOD}_minrep-${MIN_ID_REPETITIONS}_pca-${N_PCA_COMPONENTS}_${RUN_TS}"
 RUN_TAG_SAFE="$(echo "${RUN_TAG}" | sed 's/[^a-zA-Z0-9._-]/_/g')"
 OUT_DIR="${OUTPUT_BASE}/${RUN_TAG_SAFE}"
 
@@ -114,7 +112,6 @@ echo "FORCE_RECOMPUTE: ${FORCE_RECOMPUTE}"
 echo "============================================"
 echo "MIN_ID_REPETITIONS: ${MIN_ID_REPETITIONS}"
 echo "N_PCA_COMPONENTS: ${N_PCA_COMPONENTS}"
-echo "N_RESAMPLINGS: ${N_RESAMPLINGS}"
 echo "SEED: ${SEED}"
 echo "============================================"
 
@@ -129,7 +126,6 @@ CMD=(
   --vectorization-method "${VECTORIZATION_METHOD}"
   --min-id-repetitions "${MIN_ID_REPETITIONS}"
   --n-pca-components "${N_PCA_COMPONENTS}"
-  --n-resamplings "${N_RESAMPLINGS}"
   --seed "${SEED}"
 )
 
@@ -160,7 +156,7 @@ printf '  %q' "${CMD[@]}"
 echo ""
 echo ""
 
-echo "Starting repeated-ID clustering analysis..."
+echo "Starting cross-mouse ID similarity analysis..."
 "${CMD[@]}"
 EXIT_CODE=$?
 
