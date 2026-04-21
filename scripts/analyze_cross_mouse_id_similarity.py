@@ -331,15 +331,25 @@ def _plot_boxplot_by_comparison(
     labels_present = sorted(df["label"].unique())
     m1_short = mouse1.split("-")[0]
     m2_short = mouse2.split("-")[0]
+    # Required order:
+    # 1) mouse1 within ID, 2) mouse1 between ID,
+    # 3) mouse2 within ID, 4) mouse2 between ID,
+    # 5) cross-mouse within ID, 6) cross-mouse between ID.
     groups = [
         ("within_m1", "same", f"Within {m1_short}\nSame ID"),
-        ("within_m2", "same", f"Within {m2_short}\nSame ID"),
         ("within_m1", "different", f"Within {m1_short}\nDiff ID"),
+        ("within_m2", "same", f"Within {m2_short}\nSame ID"),
         ("within_m2", "different", f"Within {m2_short}\nDiff ID"),
         ("cross", "same", "Cross mice\nSame ID"),
         ("cross", "different", "Cross mice\nDiff ID"),
     ]
-    group_colors = ["steelblue", "darkorange", "cornflowerblue", "lightsalmon", "seagreen", "mediumseagreen"]
+    group_colors = [
+        "steelblue", "cornflowerblue",
+        "darkorange", "lightsalmon",
+        "seagreen", "mediumseagreen",
+    ]
+    # Add visible gaps between mouse1, mouse2, and cross-mouse groups.
+    group_positions = [1.0, 2.0, 4.0, 5.0, 7.0, 8.0]
 
     n_labels = len(labels_present)
     fig, axes = plt.subplots(1, n_labels, figsize=(6 * n_labels, 6), squeeze=False)
@@ -355,8 +365,11 @@ def _plot_boxplot_by_comparison(
             ]["distance"].values
             data_by_group.append(vals)
 
-        positions = np.arange(1, len(groups) + 1)
-        non_empty = [(p, d, idx) for idx, (p, d) in enumerate(zip(positions, data_by_group)) if len(d) > 0]
+        non_empty = [
+            (p, d, idx)
+            for idx, (p, d) in enumerate(zip(group_positions, data_by_group))
+            if len(d) > 0
+        ]
 
         if not non_empty:
             ax.set_title(f"Label: {lbl}\n(no data)")
@@ -372,8 +385,12 @@ def _plot_boxplot_by_comparison(
             patch.set_facecolor(group_colors[idx])
             patch.set_alpha(0.8)
 
-        ax.set_xticks(positions)
+        ax.set_xticks(group_positions)
         ax.set_xticklabels([entry[2] for entry in groups], fontsize=8, rotation=25, ha="right")
+        ax.set_xlim(0.4, 8.6)
+        # Visual separators for the larger inter-group gaps.
+        ax.axvline(3.0, color="gray", linewidth=1.0, linestyle="--", alpha=0.5)
+        ax.axvline(6.0, color="gray", linewidth=1.0, linestyle="--", alpha=0.5)
         ax.set_title(f"Label: {lbl}")
         ax.set_ylabel("Euclidean Distance (PCA space)")
         ax.grid(axis="y", alpha=0.3)
@@ -383,6 +400,92 @@ def _plot_boxplot_by_comparison(
     output_path.parent.mkdir(parents=True, exist_ok=True)
     plt.savefig(output_path, dpi=100, bbox_inches="tight")
     plt.close()
+
+
+def _build_id_aggregated_outputs(
+    records: List[Dict[str, Any]],
+) -> Tuple[List[Tuple[str, Any]], List[str], int, int, np.ndarray, pd.DataFrame]:
+    df = pd.DataFrame(records)
+    if df.empty:
+        return [], [], 0, 0, np.empty((0, 0), dtype=float), pd.DataFrame()
+
+    ids_m1 = set()
+    ids_m2 = set()
+
+    for row in df.itertuples(index=False):
+        comp_type = getattr(row, "comparison_type")
+        if comp_type == "within_m1":
+            ids_m1.add(getattr(row, "id_label_1"))
+            ids_m1.add(getattr(row, "id_label_2"))
+        elif comp_type == "within_m2":
+            ids_m2.add(getattr(row, "id_label_1"))
+            ids_m2.add(getattr(row, "id_label_2"))
+        elif comp_type == "cross":
+            ids_m1.add(getattr(row, "id_label_1"))
+            ids_m2.add(getattr(row, "id_label_2"))
+
+    ids_m1_sorted = sorted(ids_m1)
+    ids_m2_sorted = sorted(ids_m2)
+    n1 = len(ids_m1_sorted)
+    n2 = len(ids_m2_sorted)
+
+    axis_keys = [("m1", id_val) for id_val in ids_m1_sorted] + [
+        ("m2", id_val) for id_val in ids_m2_sorted
+    ]
+    axis_labels = [str(id_val) for _, id_val in axis_keys]
+    key_to_idx = {axis_key: i for i, axis_key in enumerate(axis_keys)}
+
+    pair_values: Dict[Tuple[Tuple[str, Any], Tuple[str, Any]], List[float]] = {}
+    for row in df.itertuples(index=False):
+        comp_type = getattr(row, "comparison_type")
+        id1 = getattr(row, "id_label_1")
+        id2 = getattr(row, "id_label_2")
+        distance = float(getattr(row, "distance"))
+
+        if comp_type == "within_m1":
+            key1 = ("m1", id1)
+            key2 = ("m1", id2)
+        elif comp_type == "within_m2":
+            key1 = ("m2", id1)
+            key2 = ("m2", id2)
+        else:
+            key1 = ("m1", id1)
+            key2 = ("m2", id2)
+
+        key = (key1, key2) if key1 <= key2 else (key2, key1)
+        pair_values.setdefault(key, []).append(distance)
+
+    n_total = len(axis_keys)
+    id_dist = np.full((n_total, n_total), np.nan, dtype=float)
+    csv_rows: List[Dict[str, Any]] = []
+    for (key1, key2), vals in sorted(pair_values.items()):
+        if key1 not in key_to_idx or key2 not in key_to_idx:
+            continue
+        i = key_to_idx[key1]
+        j = key_to_idx[key2]
+        mean_val = float(np.mean(vals))
+        id_dist[i, j] = mean_val
+        id_dist[j, i] = mean_val
+        csv_rows.append({
+            "mouse_block_1": key1[0],
+            "id_label_1": key1[1],
+            "mouse_block_2": key2[0],
+            "id_label_2": key2[1],
+            "mean_distance": mean_val,
+            "n_trial_pairs": len(vals),
+        })
+
+    return axis_keys, axis_labels, n1, n2, id_dist, pd.DataFrame(csv_rows)
+
+
+def _write_id_aggregated_csv(records: List[Dict[str, Any]], output_path: Path) -> bool:
+    _, _, _, _, _, df_out = _build_id_aggregated_outputs(records)
+    if df_out.empty:
+        return False
+
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    df_out.to_csv(output_path, index=False)
+    return True
 
 
 def _plot_id_aggregated_heatmap(
@@ -396,56 +499,10 @@ def _plot_id_aggregated_heatmap(
     Separates IDs by mouse: rows/cols ordered as [mouse1_IDs, mouse2_IDs].
     Adds a white dashed separator line between the two mouse blocks.
     """
-    df = pd.DataFrame(records)
-    if df.empty:
+    axis_keys, axis_labels, n1, n2, id_dist, _df_out = _build_id_aggregated_outputs(records)
+    if len(axis_keys) == 0:
         return
-
-    # Determine which IDs belong to which mouse
-    ids_m1 = set()
-    ids_m2 = set()
-    
-    for row in df.itertuples(index=False):
-        comp_type = getattr(row, "comparison_type")
-        if comp_type == "within_m1":
-            ids_m1.add(getattr(row, "id_label_1"))
-            ids_m1.add(getattr(row, "id_label_2"))
-        elif comp_type == "within_m2":
-            ids_m2.add(getattr(row, "id_label_1"))
-            ids_m2.add(getattr(row, "id_label_2"))
-        elif comp_type == "cross":
-            ids_m1.add(getattr(row, "id_label_1"))
-            ids_m2.add(getattr(row, "id_label_2"))
-    
-    ids_m1_sorted = sorted(ids_m1)
-    ids_m2_sorted = sorted(ids_m2)
-    n1 = len(ids_m1_sorted)
-    n2 = len(ids_m2_sorted)
-    n_total = n1 + n2
-    
-    if n_total == 0:
-        return
-    
-    # Create combined ID list for indexing
-    all_ids = ids_m1_sorted + ids_m2_sorted
-    id_to_idx = {id_val: i for i, id_val in enumerate(all_ids)}
-    pair_values: Dict[Tuple[Any, Any], List[float]] = {}
-
-    for row in df.itertuples(index=False):
-        id1 = getattr(row, "id_label_1")
-        id2 = getattr(row, "id_label_2")
-        d = float(getattr(row, "distance"))
-        key = (id1, id2) if id1 <= id2 else (id2, id1)
-        pair_values.setdefault(key, []).append(d)
-
-    # Build the (n_total × n_total) distance matrix
-    id_dist = np.full((n_total, n_total), np.nan, dtype=float)
-    for (id1, id2), vals in pair_values.items():
-        if id1 in id_to_idx and id2 in id_to_idx:
-            i = id_to_idx[id1]
-            j = id_to_idx[id2]
-            mean_val = float(np.mean(vals))
-            id_dist[i, j] = mean_val
-            id_dist[j, i] = mean_val
+    n_total = len(axis_keys)
 
     masked = np.ma.masked_invalid(id_dist)
     cmap = plt.cm.viridis.copy()
@@ -462,8 +519,8 @@ def _plot_id_aggregated_heatmap(
 
     ax.set_xticks(np.arange(n_total))
     ax.set_yticks(np.arange(n_total))
-    ax.set_xticklabels(all_ids, rotation=45, ha="right", fontsize=8)
-    ax.set_yticklabels(all_ids, fontsize=8)
+    ax.set_xticklabels(axis_labels, rotation=45, ha="right", fontsize=8)
+    ax.set_yticklabels(axis_labels, fontsize=8)
     ax.set_xlabel(f"Stimulus ID ({mouse1.split('-')[0]} IDs first)")
     ax.set_ylabel(f"Stimulus ID ({mouse1.split('-')[0]} IDs first)")
     
@@ -661,6 +718,9 @@ def _analyse_pair(
     )
     print(f"  Saved ID-aggregated heatmap: {pair_folder / 'heatmap_ids_aggregated.png'}")
 
+    if _write_id_aggregated_csv(all_distance_records, pair_folder / "id_distances.csv"):
+        print(f"  Saved ID distances CSV: {pair_folder / 'id_distances.csv'}")
+
     if all_distance_records:
         pd.DataFrame(all_distance_records).to_csv(pair_folder / "distances.csv", index=False)
         print(f"  Saved distances CSV: {pair_folder / 'distances.csv'}")
@@ -733,6 +793,7 @@ def run_pipeline(state: RunState) -> None:
         m2_short = m2.split("-")[0]
         pair_tag = f"{m1_short}_vs_{m2_short}"
         pair_folder = state.output_folder / pair_tag
+        pair_folder.mkdir(parents=True, exist_ok=True)
         pair_log = pair_folder / "run.log"
         
         print(

@@ -35,7 +35,7 @@ matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
-from scipy.spatial.distance import pdist, squareform
+from scipy.spatial.distance import cdist, pdist, squareform
 from sklearn.decomposition import PCA
 from sklearn.preprocessing import StandardScaler
 
@@ -323,6 +323,11 @@ def compute_id_aggregated_distance_matrix(
     return id_dist_matrix, unique_ids
 
 
+def _safe_label_token(label: Any) -> str:
+    """Return a filesystem-safe label token for output filenames."""
+    return str(label).replace("/", "_").replace(" ", "_")
+
+
 def plot_trial_heatmap_with_clustering(
     dist_matrix: np.ndarray,
     id_labels: np.ndarray,
@@ -353,80 +358,194 @@ def plot_trial_heatmap_with_clustering(
     plt.close()
 
 
-def plot_id_distance_heatmap(
-    id_dist_matrix: np.ndarray,
-    unique_ids: np.ndarray,
+def plot_id_distance_heatmap_all_labels(
+    label_blocks: List[Dict[str, Any]],
     output_path: Path,
 ) -> None:
-    """Plot ID-aggregated distance matrix heatmap.
-    
-    Args:
-        id_dist_matrix: ID-level distance matrix (n_unique_ids x n_unique_ids)
-        unique_ids: Unique ID values (n_unique_ids,)
-        output_path: Path to save figure
+    """Plot one ID-aggregated heatmap across all labels with block separators.
+
+    Distances are computed for all ID pairs, including cross-label pairs.
     """
-    n_ids = len(unique_ids)
-    
-    fig, ax = plt.subplots(figsize=(10, 8))
-    im = ax.imshow(id_dist_matrix, cmap="viridis", aspect="auto")
-    
-    # Set ticks and labels
-    ax.set_xticks(np.arange(n_ids))
-    ax.set_yticks(np.arange(n_ids))
-    ax.set_xticklabels(unique_ids, rotation=45, ha="right")
-    ax.set_yticklabels(unique_ids)
-    
-    ax.set_title("ID-Aggregated Distance Matrix (mean distances between ID pairs)")
-    ax.set_xlabel("Stimulus ID")
-    ax.set_ylabel("Stimulus ID")
+    if not label_blocks:
+        return
+
+    block_sizes = [len(block["unique_ids"]) for block in label_blocks]
+    total_ids = int(sum(block_sizes))
+    if total_ids == 0:
+        return
+
+    all_ids: List[Any] = []
+    all_labels: List[str] = []
+    block_starts: List[int] = []
+
+    offset = 0
+    for block in label_blocks:
+        block_starts.append(offset)
+        uids = list(block["unique_ids"])
+        all_ids.extend(uids)
+        all_labels.extend([str(block["label"])] * len(uids))
+        offset += len(uids)
+
+    # Build one feature matrix per (label, ID) node, then compute pairwise means.
+    id_nodes: List[Tuple[str, Any]] = []
+    id_features: List[np.ndarray] = []
+    for block in label_blocks:
+        label_name = str(block["label"])
+        unique_ids = list(block["unique_ids"])
+        id_labels = np.array(block["id_labels"])
+        features = np.array(block["features"])  # shape: n_trials x n_features
+        for id_val in unique_ids:
+            mask = id_labels == id_val
+            feats = features[mask]
+            if feats.shape[0] == 0:
+                continue
+            id_nodes.append((label_name, id_val))
+            id_features.append(feats)
+
+    if not id_nodes:
+        return
+
+    total_nodes = len(id_nodes)
+    full_matrix = np.full((total_nodes, total_nodes), np.nan, dtype=float)
+    all_ids = [node[1] for node in id_nodes]
+
+    for i in range(total_nodes):
+        fi = id_features[i]
+        for j in range(i, total_nodes):
+            fj = id_features[j]
+            mean_dist = float(np.mean(cdist(fi, fj, metric="euclidean")))
+            full_matrix[i, j] = mean_dist
+            full_matrix[j, i] = mean_dist
+
+    masked = np.ma.masked_invalid(full_matrix)
+    cmap = plt.cm.viridis.copy()
+    cmap.set_bad(color="lightgray")
+
+    fig, ax = plt.subplots(figsize=(12, 10))
+    im = ax.imshow(masked, cmap=cmap, aspect="auto")
     plt.colorbar(im, ax=ax, label="Mean Euclidean Distance")
-    
-    # Add grid
-    ax.set_xticks(np.arange(n_ids) - 0.5, minor=True)
-    ax.set_yticks(np.arange(n_ids) - 0.5, minor=True)
-    ax.grid(which="minor", color="gray", linestyle="-", linewidth=0.5, alpha=0.3)
-    
+
+    ax.set_xticks(np.arange(total_nodes))
+    ax.set_yticks(np.arange(total_nodes))
+    ax.set_xticklabels(all_ids, rotation=45, ha="right", fontsize=8)
+    ax.set_yticklabels(all_ids, fontsize=8)
+    ax.set_xlabel("Stimulus ID (grouped by label)")
+    ax.set_ylabel("Stimulus ID (grouped by label)")
+    ax.set_title("ID-Aggregated Distance Matrix Across All Labels")
+
+    # Draw separators and annotate each label block.
+    for block, start, size in zip(label_blocks, block_starts, block_sizes):
+        end = start + size
+        if start > 0:
+            ax.axhline(start - 0.5, color="white", linewidth=1.5, linestyle="--")
+            ax.axvline(start - 0.5, color="white", linewidth=1.5, linestyle="--")
+        center = (start + end - 1) / 2.0
+        ax.text(
+            center,
+            -2.6,
+            str(block["label"]),
+            ha="center",
+            va="bottom",
+            fontsize=9,
+            fontweight="bold",
+            clip_on=False,
+        )
+        ax.text(
+            -3.2,
+            center,
+            str(block["label"]),
+            ha="right",
+            va="center",
+            fontsize=9,
+            fontweight="bold",
+            rotation=90,
+            clip_on=False,
+        )
+
     output_path.parent.mkdir(parents=True, exist_ok=True)
-    plt.savefig(output_path, dpi=100, bbox_inches="tight")
+    # Give extra left/bottom margin for label block annotations.
+    plt.subplots_adjust(left=0.23, bottom=0.22, right=0.97, top=0.92)
+    plt.savefig(output_path, dpi=100)
     plt.close()
 
 
-def plot_boxplot_distances_by_id(
+def _split_same_vs_different(
     dist_matrix: np.ndarray,
     id_labels: np.ndarray,
-    output_path: Path,
-) -> None:
-    """Plot boxplot of distances stratified by ID pairs.
-    
-    Args:
-        dist_matrix: Distance matrix
-        id_labels: ID labels for each trial
-        output_path: Path to save figure
-    """
-    # Extract distances within same ID vs between different IDs
-    distances_within = []
-    distances_between = []
-    
+) -> Tuple[List[float], List[float]]:
+    """Return (same_id_distances, different_id_distances)."""
+    distances_within: List[float] = []
+    distances_between: List[float] = []
     for i in range(len(id_labels)):
         for j in range(i + 1, len(id_labels)):
-            d = dist_matrix[i, j]
+            d = float(dist_matrix[i, j])
             if id_labels[i] == id_labels[j]:
                 distances_within.append(d)
             else:
                 distances_between.append(d)
-    
-    fig, ax = plt.subplots(figsize=(10, 6))
-    data_to_plot = [distances_within, distances_between]
-    bp = ax.boxplot(data_to_plot, tick_labels=["Same ID", "Different ID"], patch_artist=True)
-    
-    for patch, color in zip(bp["boxes"], ["lightgreen", "lightcoral"]):
+    return distances_within, distances_between
+
+
+def plot_boxplot_distances_by_label(
+    per_label_distances: List[Dict[str, Any]],
+    output_path: Path,
+) -> None:
+    """Plot one boxplot figure with Same/Different ID boxes grouped by label."""
+    if not per_label_distances:
+        return
+
+    positions: List[float] = []
+    data: List[List[float]] = []
+    tick_labels: List[str] = []
+    box_colors: List[str] = []
+    label_boundaries: List[float] = []
+
+    pos = 1.0
+    for entry in per_label_distances:
+        same_vals = entry["same"]
+        diff_vals = entry["different"]
+        label_name = str(entry["label"])
+
+        positions.extend([pos, pos + 1.0])
+        data.extend([same_vals, diff_vals])
+        tick_labels.extend([f"{label_name}\nSame", f"{label_name}\nDifferent"])
+        box_colors.extend(["lightgreen", "lightcoral"])
+
+        # Place separator between "Same" and "Different" boxes of this label.
+        label_boundaries.append(pos + 0.5)
+        pos += 3.0
+
+    non_empty = [
+        (p, vals, lbl, col)
+        for p, vals, lbl, col in zip(positions, data, tick_labels, box_colors)
+        if len(vals) > 0
+    ]
+    if not non_empty:
+        return
+
+    fig, ax = plt.subplots(figsize=(max(12, len(per_label_distances) * 2.8), 6))
+    bp = ax.boxplot(
+        [vals for _, vals, _, _ in non_empty],
+        positions=[p for p, _, _, _ in non_empty],
+        patch_artist=True,
+        widths=0.65,
+    )
+
+    for patch, (_p, _vals, _lbl, color) in zip(bp["boxes"], non_empty):
         patch.set_facecolor(color)
-    
+        patch.set_alpha(0.85)
+
+    ax.set_xticks(positions)
+    ax.set_xticklabels(tick_labels, rotation=25, ha="right", fontsize=8)
+    for boundary in label_boundaries:
+        ax.axvline(boundary, color="gray", linewidth=1.0, linestyle="--", alpha=0.45)
+
     ax.set_ylabel("Euclidean Distance")
-    ax.set_title("Distribution of Distances by ID Relationship")
+    ax.set_title("Distance Distribution by Label and ID Relationship")
     ax.grid(axis="y", alpha=0.3)
-    
+
     output_path.parent.mkdir(parents=True, exist_ok=True)
+    plt.tight_layout()
     plt.savefig(output_path, dpi=100, bbox_inches="tight")
     plt.close()
 
@@ -583,9 +702,11 @@ def run_pipeline(state: RunState) -> Dict[str, Any]:
             unique_labels = np.unique(labels)
             print(f"  Analyzing {len(unique_labels)} labels...")
             
+            per_label_distances: List[Dict[str, Any]] = []
+            id_heatmap_blocks: List[Dict[str, Any]] = []
+
             for label in unique_labels:
                 print(f"    Label: {label}")
-                label_out_folder = mouse_out_folder / label
                 
                 try:
                     # Prepare label-specific data
@@ -619,31 +740,37 @@ def run_pipeline(state: RunState) -> Dict[str, Any]:
                         dist_matrix, id_labels, trial_ids_label
                     )
                     
-                    # Create output folder
-                    label_out_folder.mkdir(parents=True, exist_ok=True)
+                    mouse_out_folder.mkdir(parents=True, exist_ok=True)
+                    label_token = _safe_label_token(label)
                     
                     # Export trial distances
-                    trial_dist_csv_path = label_out_folder / "trial_distances.csv"
+                    trial_dist_csv_path = mouse_out_folder / f"trial_distances_{label_token}.csv"
                     export_trial_distance_matrix_csv(dist_matrix, trial_ids_label, id_labels, trial_dist_csv_path)
                     print(f"      Saved trial distances: {trial_dist_csv_path}")
                     
                     # Export ID distances
-                    id_dist_csv_path = label_out_folder / "id_distances.csv"
+                    id_dist_csv_path = mouse_out_folder / f"id_distances_{label_token}.csv"
                     export_id_distance_matrix_csv(id_dist_matrix, unique_ids, id_dist_csv_path)
                     print(f"      Saved ID distances: {id_dist_csv_path}")
                     
-                    # Generate plots
-                    trial_heatmap_path = label_out_folder / "trial_heatmap.png"
+                    # Generate per-label trial heatmap in a single per-mouse folder.
+                    trial_heatmap_path = mouse_out_folder / f"trial_heatmap_{label_token}.png"
                     plot_trial_heatmap_with_clustering(dist_matrix, id_labels, trial_ids_label, trial_heatmap_path)
                     print(f"      Saved trial heatmap: {trial_heatmap_path}")
-                    
-                    id_heatmap_path = label_out_folder / "id_distance_heatmap.png"
-                    plot_id_distance_heatmap(id_dist_matrix, unique_ids, id_heatmap_path)
-                    print(f"      Saved ID distance heatmap: {id_heatmap_path}")
-                    
-                    boxplot_path = label_out_folder / "boxplot_distances.png"
-                    plot_boxplot_distances_by_id(dist_matrix, id_labels, boxplot_path)
-                    print(f"      Saved boxplot: {boxplot_path}")
+
+                    same_vals, diff_vals = _split_same_vs_different(dist_matrix, id_labels)
+                    per_label_distances.append({
+                        "label": label,
+                        "same": same_vals,
+                        "different": diff_vals,
+                    })
+                    id_heatmap_blocks.append({
+                        "label": label,
+                        "id_dist_matrix": id_dist_matrix,
+                        "unique_ids": unique_ids,
+                        "id_labels": id_labels,
+                        "features": X_reduced,
+                    })
                     
                     # Create summary row
                     summary_rows.append({
@@ -658,6 +785,17 @@ def run_pipeline(state: RunState) -> Dict[str, Any]:
                 except Exception as exc:
                     print(f"      FAILED: {exc}")
                     traceback.print_exc()
+
+            # Combined figures for all labels in this mouse.
+            if per_label_distances:
+                boxplot_path = mouse_out_folder / "boxplot_distances.png"
+                plot_boxplot_distances_by_label(per_label_distances, boxplot_path)
+                print(f"  Saved combined boxplot: {boxplot_path}")
+
+            if id_heatmap_blocks:
+                id_heatmap_path = mouse_out_folder / "id_distance_heatmap.png"
+                plot_id_distance_heatmap_all_labels(id_heatmap_blocks, id_heatmap_path)
+                print(f"  Saved combined ID distance heatmap: {id_heatmap_path}")
         
         except Exception as exc:
             print(f"  FAILED: {exc}")

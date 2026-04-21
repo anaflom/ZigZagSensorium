@@ -11,7 +11,7 @@
 #SBATCH --ntasks=1
 #SBATCH --cpus-per-task=8
 #SBATCH --mem=80G
-#SBATCH --time=6:00:00
+#SBATCH --time=3:00:00
 #SBATCH --output=logs/slurm-zz-within-mouse-id-sim-%j.out
 #SBATCH --error=logs/slurm-zz-within-mouse-id-sim-%j.err
 
@@ -49,7 +49,7 @@ META_ROOT="${META_ROOT:-/u/mdmc/anaflom/projects_mdmc/sensorium/metadata}"
 
 # Core parameters
 P_ACTIVE="${P_ACTIVE:-30}"
-PER_TRIAL_THRESH="${PER_TRIAL_THRESH:-false}"
+PER_TRIAL_THRESH="${PER_TRIAL_THRESH:-true}"
 VECTORIZATION_METHOD="${VECTORIZATION_METHOD:-Turnover}"
 MICE="${MICE:-None}"
 CLIP_FRAMES="${CLIP_FRAMES:-240}"
