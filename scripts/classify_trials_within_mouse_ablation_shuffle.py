@@ -108,9 +108,24 @@ def _existing_shuffle_ids(
 MANIFEST_FILENAME = "shuffle_manifest.json"
 
 
-def _load_manifest(cache_dir: Path) -> Dict[str, Any]:
-    mp = cache_dir / MANIFEST_FILENAME
-    if mp.exists():
+def _latest_manifest_path(cache_dir: Path, shuffle_type: str) -> Optional[Path]:
+    candidates = sorted(
+        cache_dir.glob(f"shuffle_manifest_{shuffle_type}_*.json"),
+        key=lambda p: p.stat().st_mtime,
+        reverse=True,
+    )
+    if candidates:
+        return candidates[0]
+
+    legacy = cache_dir / MANIFEST_FILENAME
+    if legacy.exists():
+        return legacy
+    return None
+
+
+def _load_manifest(cache_dir: Path, shuffle_type: str) -> Dict[str, Any]:
+    mp = _latest_manifest_path(cache_dir, shuffle_type)
+    if mp is not None:
         with open(mp, encoding="utf-8") as fp:
             return json.load(fp)
     return {}
@@ -254,7 +269,7 @@ def _preflight_check(
 
         # Check 2: Manifest max_trials consistency
         if max_trials is not None:
-            manifest = _load_manifest(mcdir)
+            manifest = _load_manifest(mcdir, shuffle_type)
             mkey = _manifest_key(shuffle_type, method, p_active, per_trial_thresh, clip_frames)
             entry = manifest.get(mkey, {})
             stored_max = entry.get("max_trials_used", None)

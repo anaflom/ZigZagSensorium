@@ -123,18 +123,36 @@ def _next_shuffle_ids(
 MANIFEST_FILENAME = "shuffle_manifest.json"
 
 
-def _load_manifest(cache_dir: Path) -> Dict[str, Any]:
-    mp = cache_dir / MANIFEST_FILENAME
-    if mp.exists():
+def _latest_manifest_path(cache_dir: Path, shuffle_type: Optional[str]) -> Optional[Path]:
+    if shuffle_type:
+        candidates = sorted(
+            cache_dir.glob(f"shuffle_manifest_{shuffle_type}_*.json"),
+            key=lambda p: p.stat().st_mtime,
+            reverse=True,
+        )
+        if candidates:
+            return candidates[0]
+
+    legacy = cache_dir / MANIFEST_FILENAME
+    if legacy.exists():
+        return legacy
+    return None
+
+
+def _load_manifest(cache_dir: Path, shuffle_type: Optional[str]) -> Dict[str, Any]:
+    mp = _latest_manifest_path(cache_dir, shuffle_type)
+    if mp is not None:
         with open(mp, encoding="utf-8") as fp:
             return json.load(fp)
     return {}
 
 
-def _save_manifest(cache_dir: Path, manifest: Dict[str, Any]) -> None:
-    mp = cache_dir / MANIFEST_FILENAME
+def _save_manifest(cache_dir: Path, manifest: Dict[str, Any], shuffle_type: str) -> Path:
+    ts = datetime.now().strftime("%Y%m%d_%H%M%S")
+    mp = cache_dir / f"shuffle_manifest_{shuffle_type}_{ts}.json"
     with open(mp, "w", encoding="utf-8") as fp:
         json.dump(manifest, fp, indent=2)
+    return mp
 
 
 def _manifest_key(
@@ -698,7 +716,7 @@ def main() -> None:
 
         # Update manifest
         mcdir = _resolve_mouse_cache_dir(fs, mouse_name)
-        manifest = _load_manifest(mcdir)
+        manifest = _load_manifest(mcdir, args.shuffle_type)
         mkey = _manifest_key(
             args.shuffle_type,
             args.vectorization_method,
@@ -733,7 +751,7 @@ def main() -> None:
         if result.get("n_trials") is not None:
             entry["n_trials_per_shuffle"] = result["n_trials"]
         manifest[mkey] = entry
-        _save_manifest(mcdir, manifest)
+        _save_manifest(mcdir, manifest, args.shuffle_type)
 
         gc.collect()
 
