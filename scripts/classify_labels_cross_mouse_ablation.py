@@ -75,6 +75,7 @@ class RunState:
     mice: Optional[List[str]]
     clip_frames: Optional[int]
     grid_subdir: str
+    normalize_grids: bool
     cache_dir: Optional[Path]
     max_trials: Optional[int]
     batch_size_vec: int
@@ -215,8 +216,11 @@ def run_pipeline(state: RunState) -> Dict[str, object]:
         print(f"  mice:              {state.mice}")
         print(f"  clip_frames:       {state.clip_frames}")
         print(f"  grid_subdir:       {state.grid_subdir}")
+        print(f"  normalize_grids:   {state.normalize_grids}")
         print(f"  max_trials:        {state.max_trials}")
         print(f"  device:            {device}")
+
+        grid_mode_label = "trial-l1-normalized-grid" if state.normalize_grids else "raw-grid"
 
         discovered_mice = _discover_mice(state.data_root)
         selected_mice = state.mice if state.mice is not None else discovered_mice
@@ -419,12 +423,14 @@ def run_pipeline(state: RunState) -> Dict[str, object]:
                     y=train_y,
                     valid_frames=train_grid_frames,
                     clip_frames=global_clip,
+                    normalize_by_trial=state.normalize_grids,
                 )
                 test_grid_ds = GridTrialDataset(
                     grid_paths=test_grid_paths,
                     y=test_y,
                     valid_frames=test_grid_frames,
                     clip_frames=global_clip,
+                    normalize_by_trial=state.normalize_grids,
                 )
                 cnn3d_metrics, cnn3d_pred = train_eval_nn(
                     make_model=lambda: CNN3D(
@@ -534,14 +540,14 @@ def run_pipeline(state: RunState) -> Dict[str, object]:
             ax_acc.bar(x + offsets[mk], vals_acc, width, label=model_titles[mk], alpha=0.85, color=colors[mk])
         ax_f1.set_ylim(0, 1.05)
         ax_f1.set_ylabel("Macro-F1")
-        ax_f1.set_title(f"Cross-mouse LOMO macro-F1 by test mouse ({state.method})")
+        ax_f1.set_title(f"Cross-mouse LOMO macro-F1 by test mouse ({state.method}, {grid_mode_label})")
         ax_f1.grid(axis="y", alpha=0.25)
         ax_f1.legend(loc="upper right", ncol=2, fontsize=8)
         ax_acc.set_xticks(x)
         ax_acc.set_xticklabels([_short_mouse_name(m) for m in fold_order], rotation=30, ha="right", fontsize=8)
         ax_acc.set_ylim(0, 1.05)
         ax_acc.set_ylabel("Accuracy")
-        ax_acc.set_title(f"Cross-mouse LOMO accuracy by test mouse ({state.method})")
+        ax_acc.set_title(f"Cross-mouse LOMO accuracy by test mouse ({state.method}, {grid_mode_label})")
         ax_acc.grid(axis="y", alpha=0.25)
         fig.tight_layout()
         fig1 = figures_dir / "01_lomo_macro_f1_by_test_mouse.png"
@@ -561,14 +567,14 @@ def run_pipeline(state: RunState) -> Dict[str, object]:
         axes[0].set_xticklabels([model_titles[m] for m in model_order], rotation=25, ha="right", fontsize=8)
         axes[0].set_ylim(0, 1.05)
         axes[0].set_ylabel("Accuracy")
-        axes[0].set_title("Mean accuracy across test mice")
+        axes[0].set_title(f"Mean accuracy across test mice ({grid_mode_label})")
         axes[0].grid(axis="y", alpha=0.25)
         axes[1].bar(xi, mean_f1, yerr=std_f1, capsize=4, color=color_list, alpha=0.85)
         axes[1].set_xticks(xi)
         axes[1].set_xticklabels([model_titles[m] for m in model_order], rotation=25, ha="right", fontsize=8)
         axes[1].set_ylim(0, 1.05)
         axes[1].set_ylabel("Macro-F1")
-        axes[1].set_title("Mean macro-F1 across test mice")
+        axes[1].set_title(f"Mean macro-F1 across test mice ({grid_mode_label})")
         axes[1].grid(axis="y", alpha=0.25)
         fig.tight_layout()
         fig2 = figures_dir / "02_lomo_mean_scores.png"
@@ -605,7 +611,10 @@ def run_pipeline(state: RunState) -> Dict[str, object]:
                 if mk == best_model:
                     title += " ★"
                 ax.set_title(title, fontsize=7)
-        fig.suptitle("Normalized confusion matrices — all classifiers per test mouse (★ = best)", fontsize=11)
+        fig.suptitle(
+            f"Normalized confusion matrices — all classifiers per test mouse ({grid_mode_label}, ★ = best)",
+            fontsize=11,
+        )
         fig.tight_layout()
         fig3 = figures_dir / "03_all_classifier_confusion_matrices.png"
         fig.savefig(fig3, dpi=300, bbox_inches="tight")
@@ -652,6 +661,7 @@ def run_pipeline(state: RunState) -> Dict[str, object]:
             "per_trial_thresh": state.per_trial_thresh,
             "zz_folder": state.zz_folder,
             "grid_subdir": state.grid_subdir,
+            "normalize_grids": state.normalize_grids,
             "global_clip_frames": int(global_clip),
             "eligible_mice": eligible_mice,
             "n_lomo_folds": len(fold_order),
@@ -680,6 +690,7 @@ def run_pipeline(state: RunState) -> Dict[str, object]:
                     "train_mice",
                     "n_train_mice",
                     "method",
+                    "normalize_grids",
                     "model",
                     "input",
                     "n_train_trials",
@@ -707,6 +718,7 @@ def run_pipeline(state: RunState) -> Dict[str, object]:
                             train_mice_str,
                             row["n_train_mice"],
                             state.method,
+                            state.normalize_grids,
                             model_name,
                             "grid" if model_name == "cnn3d" else "vector",
                             row["n_train_trials"],
@@ -755,6 +767,7 @@ def build_arg_parser() -> argparse.ArgumentParser:
     parser.add_argument("--mice", default=None, type=_opt_csv_list)
     parser.add_argument("--clip-frames", default=None, type=_opt_int)
     parser.add_argument("--grid-subdir", default="trials_grid")
+    parser.add_argument("--normalize-grids", default=False, type=_str2bool)
     parser.add_argument(
         "--cache-dir",
         default=None,
@@ -796,6 +809,7 @@ def main() -> int:
         mice=args.mice,
         clip_frames=args.clip_frames,
         grid_subdir=args.grid_subdir,
+        normalize_grids=args.normalize_grids,
         cache_dir=args.cache_dir,
         max_trials=args.max_trials,
         batch_size_vec=args.batch_size_vec,

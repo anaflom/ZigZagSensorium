@@ -46,11 +46,15 @@ class GridTrialDataset(Dataset):
         y: np.ndarray,
         valid_frames: np.ndarray,
         clip_frames: int,
+        normalize_by_trial: bool = False,
+        norm_eps: float = 1e-8,
     ) -> None:
         self.grid_paths = list(grid_paths)
         self.y = np.asarray(y, dtype=np.int64)
         self.valid_frames = np.asarray(valid_frames, dtype=np.int64)
         self.clip_frames = int(clip_frames)
+        self.normalize_by_trial = bool(normalize_by_trial)
+        self.norm_eps = float(norm_eps)
 
         if len(self.grid_paths) == 0:
             raise RuntimeError("GridTrialDataset received no paths")
@@ -80,8 +84,16 @@ class GridTrialDataset(Dataset):
         if t_eff <= 0:
             raise RuntimeError(f"Invalid effective clip length={t_eff} for sample {self.grid_paths[idx]}")
 
+        x_valid = x[:, :t_eff, :, :]
+        if self.normalize_by_trial:
+            # Normalize by per-trial positive activation mass to reduce
+            # information carried by total activation amplitude.
+            pos_mass = float(np.maximum(x_valid, 0.0).sum())
+            denom = max(pos_mass, self.norm_eps)
+            x_valid = x_valid / denom
+
         out = np.zeros((x.shape[0], self.clip_frames, x.shape[2], x.shape[3]), dtype=np.float32)
-        out[:, :t_eff, :, :] = x[:, :t_eff, :, :]
+        out[:, :t_eff, :, :] = x_valid
 
         return torch.tensor(out, dtype=torch.float32), int(self.y[idx])
 

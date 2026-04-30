@@ -65,6 +65,8 @@ from utils import (
     _opt_int,
     _resolve_mouse_cache_dir,
     _str2bool,
+    build_shuffled_grid_cache_dir,
+    build_shuffled_grid_cache_path,
     build_vectorization_cache_stem,
     create_vectorization,
     load_labelled_barcodes,
@@ -353,6 +355,7 @@ def _process_single_trial(
     per_trial_thresh: bool,
     global_threshold: Optional[float],
     max_dim: int,
+    shuffled_grid_path: Path,
 ) -> Tuple[bool, Optional[List[Tuple[int, float, float]]], str, float]:
     """Process one trial and return (ok, bars, error, elapsed_sec)."""
     t0 = time.time()
@@ -379,9 +382,16 @@ def _process_single_trial(
             p_active=p_active,
             max_dim=max_dim,
         )
+        shuffled_grid_path.parent.mkdir(parents=True, exist_ok=True)
+        np.save(shuffled_grid_path, shuffled_grid)
         del shuffled_grid
         return True, bars, "", time.time() - t0
     except Exception:
+        try:
+            if shuffled_grid_path.exists():
+                shuffled_grid_path.unlink()
+        except OSError:
+            pass
         return False, None, traceback.format_exc(), time.time() - t0
 
 
@@ -495,11 +505,14 @@ def _generate_for_mouse(
             different_shuffle_per_trial,
         )
         cache_path = mouse_cache_dir / f"{shuffle_stem}.npz"
+        shuffled_grid_dir = build_shuffled_grid_cache_dir(mouse_cache_dir, shuffle_stem)
 
         if cache_path.exists() and not force_recompute:
             print(f"  [shuffle {shuffle_id}] SKIP (cache exists: {cache_path.name})", flush=True)
             skipped.append(shuffle_id)
             continue
+
+        shuffled_grid_dir.mkdir(parents=True, exist_ok=True)
 
         shuffle_seed = base_seed + shuffle_id * 1000
         print(
@@ -525,6 +538,11 @@ def _generate_for_mouse(
                     per_trial_thresh=per_trial_thresh,
                     global_threshold=global_threshold,
                     max_dim=max_dim,
+                    shuffled_grid_path=build_shuffled_grid_cache_path(
+                        mouse_cache_dir,
+                        shuffle_stem,
+                        int(trial_ids_common[trial_idx]),
+                    ),
                 )
                 if not ok_trial or bars is None:
                     print(
@@ -569,6 +587,11 @@ def _generate_for_mouse(
                         per_trial_thresh,
                         global_threshold,
                         max_dim,
+                        build_shuffled_grid_cache_path(
+                            mouse_cache_dir,
+                            shuffle_stem,
+                            int(trial_ids_common[i]),
+                        ),
                     ): i
                     for i, gpath in enumerate(grid_paths_common)
                 }
@@ -832,6 +855,8 @@ def main() -> None:
             "different_shuffle_per_trial": args.different_shuffle_per_trial,
             "available_ids": existing_after,
             "n_available": len(existing_after),
+            "shuffled_grids_persisted": True,
+            "shuffled_grid_cache_layout": "{cache_stem}_grids/trial_{trial_id:06d}.npy",
             "last_updated": datetime.now().isoformat(timespec="seconds"),
         })
         if result.get("n_trials") is not None:

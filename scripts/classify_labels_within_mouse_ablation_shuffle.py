@@ -61,8 +61,12 @@ from sklearn.preprocessing import LabelEncoder
 from torch.utils.data import DataLoader, Subset
 
 from classification_models import (
+    CNN1D,
     CNN3D,
     GridTrialDataset,
+    MLP,
+    VectorDataset,
+    infer_cnn1d_shape,
     run_logreg_cv,
     run_nn_cv,
 )
@@ -77,7 +81,7 @@ from utils import (
     _str2bool,
     build_vectorization_cache_stem,
     load_labelled_barcodes,
-    load_labelled_grid_paths,
+    load_shuffled_grid_cache_paths,
     load_vectorization_cache,
 )
 
@@ -193,14 +197,20 @@ def _build_parser() -> argparse.ArgumentParser:
     p.add_argument("--grid-subdir", type=str, default="trials_grid")
     p.add_argument("--zz-folder", type=str, default=None)
 
-    # Classification (CNN3D)
+    # Classification
+    p.add_argument("--n-splits", type=int, default=5)
+    p.add_argument("--batch-size-vec", type=int, default=64)
     p.add_argument("--batch-size-grid", type=int, default=16)
+    p.add_argument("--epochs-mlp", type=int, default=60)
+    p.add_argument("--epochs-cnn1d", type=int, default=60)
     p.add_argument("--epochs-cnn3d", type=int, default=40)
+    p.add_argument("--lr-vec", type=float, default=1e-3)
     p.add_argument("--lr-cnn3d", type=float, default=0.0005)
     p.add_argument("--weight-decay", type=float, default=0.0001)
     p.add_argument("--early-stop-patience", type=int, default=10)
     p.add_argument("--device", type=str, default="cuda")
     p.add_argument("--num-workers-dl", type=int, default=0)
+    p.add_argument("--normalize-grids", type=_str2bool, default=False)
     p.add_argument("--max-dim", type=int, default=2)
 
     return p
@@ -339,24 +349,32 @@ def _run_within_mouse_one_shuffle(
     mouse_name: str,
     shuffle_id: int,
     cache_path: Path,
-    data_root: Path,
-    meta_root: Path,
-    zz_folder: str,
-    grid_subdir: str,
-    max_trials: Optional[int],
     clip_frames: int,
+    n_splits: int,
     device: torch.device,
+    epochs_mlp: int,
+    epochs_cnn1d: int,
     epochs_cnn3d: int,
+    lr_vec: float,
     lr_cnn3d: float,
+    batch_size_vec: int,
     batch_size_grid: int,
+    normalize_grids: bool,
     weight_decay: float,
     early_stop_patience: int,
     num_workers_dl: int,
     seed: int,
 ) -> Tuple[Optional[Dict[str, Any]], Optional[Dict[str, Any]]]:
-    """Return (result_dict, cm_payload) or (None, None) on skip."""
+    """Return (result_dict, cm_payload) or (None, None) on skip.
 
-    # Load cached vectorization
+    Uses the same four-model CV logic as classify_labels_within_mouse_ablation.py.
+    The only difference is that data is loaded from the shuffled feature/grid caches.
+    """
+    from sklearn.preprocessing import StandardScaler
+
+    model_order = ["logreg", "mlp", "cnn1d", "cnn3d"]
+
+    # Load cached shuffled vectorization
     cached = load_vectorization_cache(cache_path)
     x_vec = np.nan_to_num(np.asarray(
         cached["features"] if "features" in cached else cached["X"]
@@ -369,56 +387,96 @@ def _run_within_mouse_one_shuffle(
         print(f"    skipped (only 1 class)", flush=True)
         return None, None
 
-    # Load grid paths for CNN3D
-    grid_paths, _, grid_trial_ids, grid_valid_frames = load_labelled_grid_paths(
-        data_root, meta_root, mouse_name, grid_subdir=grid_subdir
-    )
-    grid_idx = {int(tid): i for i, tid in enumerate(grid_trial_ids)}
-    # Align trial IDs between cached vec and grids
-    common = [tid for tid in trial_ids_cache if int(tid) in grid_idx]
-    if not common:
-        print(f"    skipped (no overlapping trial IDs with grids)", flush=True)
+    # Load shuffled grid paths saved by generate_trials_ablation_shuffle.py
+    try:
+        grid_paths = load_shuffled_grid_cache_paths(cache_path, trial_ids_cache.tolist())
+    except FileNotFoundError as exc:
+        print(f"    skipped (shuffled grid cache missing: {exc})", flush=True)
         return None, None
 
-    vec_idx_map = {int(tid): i for i, tid in enumerate(trial_ids_cache)}
-    vec_take = np.array([vec_idx_map[int(tid)] for tid in common], dtype=np.int64)
-    grid_take = np.array([grid_idx[int(tid)] for tid in common], dtype=np.int64)
-
-    x_vec_aligned = x_vec[vec_take]
-    labels_aligned = labels[vec_take]
-    grid_paths_aligned = [grid_paths[i] for i in grid_take]
-    gf_aligned = grid_valid_frames[grid_take]
-
-    le = LabelEncoder().fit(labels_aligned)
-    y_int = le.transform(labels_aligned)
+    le = LabelEncoder().fit(labels)
+    y_int = le.transform(labels)
     class_labels = list(le.classes_)
 
-    n_splits = min(5, int(np.bincount(y_int).min()))
-    if n_splits < 2:
+    folds = min(int(n_splits), int(np.bincount(y_int).min()))
+    if folds < 2:
         print(f"    skipped (min class count < 2)", flush=True)
         return None, None
 
-    cv = StratifiedKFold(n_splits=n_splits, shuffle=True, random_state=seed)
+    cv = StratifiedKFold(n_splits=folds, shuffle=True, random_state=seed)
     splits = list(cv.split(np.zeros(len(y_int)), y_int))
 
-    # LogReg
-    logreg_metrics, logreg_pred = run_logreg_cv(x_vec_aligned, y_int, splits)
+    clip_used = int(clip_frames)
+
+    # LogReg (uses internal per-fold scaling)
+    logreg_metrics, logreg_pred = run_logreg_cv(x_vec, y_int, splits)
+
+    # MLP
+    def build_mlp_dataset(train_idx: np.ndarray, val_idx: np.ndarray):
+        scaler = StandardScaler().fit(x_vec[train_idx])
+        x_tr = scaler.transform(x_vec[train_idx])
+        x_va = scaler.transform(x_vec[val_idx])
+        return VectorDataset(x_tr, y_int[train_idx]), VectorDataset(x_va, y_int[val_idx])
+
+    mlp_metrics, mlp_pred = run_nn_cv(
+        make_model=lambda: MLP(n_classes=len(class_labels), input_dim=x_vec.shape[1]),
+        train_dataset_builder=build_mlp_dataset,
+        y_int=y_int,
+        splits=splits,
+        epochs=epochs_mlp,
+        lr=lr_vec,
+        batch_size=batch_size_vec,
+        patience=early_stop_patience,
+        weight_decay=weight_decay,
+        device=device,
+        num_workers=num_workers_dl,
+    )
+
+    # 1D-CNN
+    cnn1d_channels, cnn1d_seq_len = infer_cnn1d_shape(x_vec.shape[1], clip_used)
+
+    def build_cnn1d_dataset(train_idx: np.ndarray, val_idx: np.ndarray):
+        scaler = StandardScaler().fit(x_vec[train_idx])
+        x_tr = scaler.transform(x_vec[train_idx])
+        x_va = scaler.transform(x_vec[val_idx])
+        return VectorDataset(x_tr, y_int[train_idx]), VectorDataset(x_va, y_int[val_idx])
+
+    cnn1d_metrics, cnn1d_pred = run_nn_cv(
+        make_model=lambda: CNN1D(
+            n_classes=len(class_labels),
+            in_channels=cnn1d_channels,
+            seq_len=cnn1d_seq_len,
+        ),
+        train_dataset_builder=build_cnn1d_dataset,
+        y_int=y_int,
+        splits=splits,
+        epochs=epochs_cnn1d,
+        lr=lr_vec,
+        batch_size=batch_size_vec,
+        patience=early_stop_patience,
+        weight_decay=weight_decay,
+        device=device,
+        num_workers=num_workers_dl,
+    )
 
     # 3D-CNN
     grid_dataset = GridTrialDataset(
-        grid_paths=grid_paths_aligned,
+        grid_paths=grid_paths,
         y=y_int,
-        valid_frames=gf_aligned,
-        clip_frames=int(clip_frames),
+        valid_frames=valid_frames_cache,
+        clip_frames=clip_used,
+        normalize_by_trial=normalize_grids,
     )
+
+    def build_grid_dataset(train_idx: np.ndarray, val_idx: np.ndarray):
+        return Subset(grid_dataset, train_idx), Subset(grid_dataset, val_idx)
+
     cnn3d_metrics, cnn3d_pred = run_nn_cv(
         make_model=lambda: CNN3D(
             n_classes=len(class_labels),
             in_channels=grid_dataset.in_channels,
         ),
-        train_dataset_builder=lambda tr_idx, val_idx: (
-            Subset(grid_dataset, tr_idx), Subset(grid_dataset, val_idx)
-        ),
+        train_dataset_builder=build_grid_dataset,
         y_int=y_int,
         splits=splits,
         epochs=epochs_cnn3d,
@@ -430,31 +488,38 @@ def _run_within_mouse_one_shuffle(
         num_workers=num_workers_dl,
     )
 
-    best_model = max(
-        ["logreg", "cnn3d"],
-        key=lambda m: {"logreg": logreg_metrics, "cnn3d": cnn3d_metrics}[m].get("mean_f1", 0),
-    )
+    model_metrics = {
+        "logreg": logreg_metrics,
+        "mlp": mlp_metrics,
+        "cnn1d": cnn1d_metrics,
+        "cnn3d": cnn3d_metrics,
+    }
+    model_preds = {
+        "logreg": logreg_pred,
+        "mlp": mlp_pred,
+        "cnn1d": cnn1d_pred,
+        "cnn3d": cnn3d_pred,
+    }
+    best_model = max(model_order, key=lambda m: model_metrics[m]["mean_f1"])
 
     result = {
         "shuffle_id": shuffle_id,
         "mouse": mouse_name,
         "n_trials": int(len(y_int)),
-        "cv_folds": n_splits,
-        "n_features": int(x_vec_aligned.shape[1]),
-        "clip_frames": int(clip_frames),
+        "cv_folds": folds,
+        "n_features": int(x_vec.shape[1]),
+        "clip_frames": clip_used,
+        "cnn1d_channels": int(cnn1d_channels),
+        "cnn1d_seq_len": int(cnn1d_seq_len),
         "class_labels": class_labels,
         "n_classes": len(class_labels),
         "best_model": best_model,
-        "models": {
-            "logreg": logreg_metrics,
-            "cnn3d": cnn3d_metrics,
-        },
+        "models": model_metrics,
     }
 
     model_cms = {
-        mk: confusion_matrix(y_int, {"logreg": logreg_pred, "cnn3d": cnn3d_pred}[mk],
-                             labels=np.arange(len(class_labels)))
-        for mk in ["logreg", "cnn3d"]
+        mk: confusion_matrix(y_int, model_preds[mk], labels=np.arange(len(class_labels)))
+        for mk in model_order
     }
     cm_payload = {
         "labels": class_labels,
@@ -472,26 +537,33 @@ def _save_summary_figures_for_group(
     confusion_group: Dict[str, Dict[str, Any]],
     figures_dir: Path,
     method: str,
+    grid_mode_label: str,
 ) -> List[Path]:
     """Save ablation-style summary figures for one result group.
 
     The group can be one shuffle (e.g. shuffle0003) or an aggregate
     (e.g. avg_across_shuffles).
     """
-    model_order = ["logreg", "cnn3d"]
+    model_order = ["logreg", "mlp", "cnn1d", "cnn3d"]
     model_titles = {
         "logreg": "LogReg (vector)",
+        "mlp": "MLP (vector)",
+        "cnn1d": "1D-CNN (vector)",
         "cnn3d": "3D-CNN (grid)",
     }
     colors = {
         "logreg": "#4C72B0",
+        "mlp": "#55A868",
+        "cnn1d": "#C44E52",
         "cnn3d": "#DD8452",
     }
     offsets = {
-        "logreg": -0.5 * 0.32,
-        "cnn3d": 0.5 * 0.32,
+        "logreg": -1.5 * 0.18,
+        "mlp": -0.5 * 0.18,
+        "cnn1d": 0.5 * 0.18,
+        "cnn3d": 1.5 * 0.18,
     }
-    width = 0.32
+    width = 0.18
 
     mice_order = sorted(per_mouse_group.keys())
     if not mice_order:
@@ -536,7 +608,9 @@ def _save_summary_figures_for_group(
 
     ax_f1.set_ylim(0, 1.05)
     ax_f1.set_ylabel("Macro-F1")
-    ax_f1.set_title(f"Within-mouse shuffle ablation by mouse ({method}) - {group_name}")
+    ax_f1.set_title(
+        f"Within-mouse shuffle ablation by mouse ({method}, {grid_mode_label}) - {group_name}"
+    )
     ax_f1.grid(axis="y", alpha=0.25)
     ax_f1.legend(loc="upper right", ncol=2, fontsize=8)
 
@@ -544,7 +618,9 @@ def _save_summary_figures_for_group(
     ax_acc.set_xticklabels([_short_mouse_name(m) for m in mice_order], rotation=30, ha="right", fontsize=8)
     ax_acc.set_ylim(0, 1.05)
     ax_acc.set_ylabel("Accuracy")
-    ax_acc.set_title(f"Within-mouse shuffle ablation accuracy by mouse ({method}) - {group_name}")
+    ax_acc.set_title(
+        f"Within-mouse shuffle ablation accuracy by mouse ({method}, {grid_mode_label}) - {group_name}"
+    )
     ax_acc.grid(axis="y", alpha=0.25)
 
     fig.tight_layout()
@@ -572,7 +648,7 @@ def _save_summary_figures_for_group(
     axes[0].set_xticklabels([model_titles[m] for m in model_order], rotation=25, ha="right", fontsize=8)
     axes[0].set_ylim(0, 1.05)
     axes[0].set_ylabel("Accuracy")
-    axes[0].set_title(f"Mean accuracy across mice ({group_name})")
+    axes[0].set_title(f"Mean accuracy across mice ({group_name}, {grid_mode_label})")
     axes[0].grid(axis="y", alpha=0.25)
 
     axes[1].bar(
@@ -587,7 +663,7 @@ def _save_summary_figures_for_group(
     axes[1].set_xticklabels([model_titles[m] for m in model_order], rotation=25, ha="right", fontsize=8)
     axes[1].set_ylim(0, 1.05)
     axes[1].set_ylabel("Macro-F1")
-    axes[1].set_title(f"Mean macro-F1 across mice ({group_name})")
+    axes[1].set_title(f"Mean macro-F1 across mice ({group_name}, {grid_mode_label})")
     axes[1].grid(axis="y", alpha=0.25)
 
     fig.tight_layout()
@@ -626,7 +702,7 @@ def _save_summary_figures_for_group(
             ax.set_title(title, fontsize=7)
 
     fig.suptitle(
-        f"Normalized confusion matrices ({group_name}) - all classifiers per mouse (★ = best)",
+        f"Normalized confusion matrices ({group_name}, {grid_mode_label}) - all classifiers per mouse (★ = best)",
         fontsize=11,
     )
     fig.tight_layout()
@@ -727,8 +803,11 @@ def main() -> None:
         print(f"  method               : {args.vectorization_method}")
         print(f"  p_active             : {args.p_active}")
         print(f"  clip_frames          : {global_clip}")
+        print(f"  normalize_grids      : {args.normalize_grids}")
         print(f"  device               : {device}")
         print(f"  seed                 : {args.seed}")
+
+        grid_mode_label = "trial-l1-normalized-grid" if args.normalize_grids else "raw-grid"
         print("\nSampled shuffle IDs:")
         for mn, ids in sampled_ids.items():
             print(f"  {mn}: {ids}")
@@ -767,16 +846,17 @@ def main() -> None:
                         mouse_name=mouse_name,
                         shuffle_id=shuffle_id,
                         cache_path=cache_path,
-                        data_root=args.data_root,
-                        meta_root=args.meta_root,
-                        zz_folder=zz_folder,
-                        grid_subdir=args.grid_subdir,
-                        max_trials=args.max_trials,
                         clip_frames=global_clip,
+                        n_splits=args.n_splits,
                         device=device,
+                        epochs_mlp=args.epochs_mlp,
+                        epochs_cnn1d=args.epochs_cnn1d,
                         epochs_cnn3d=args.epochs_cnn3d,
+                        lr_vec=args.lr_vec,
                         lr_cnn3d=args.lr_cnn3d,
+                        batch_size_vec=args.batch_size_vec,
                         batch_size_grid=args.batch_size_grid,
+                        normalize_grids=args.normalize_grids,
                         weight_decay=args.weight_decay,
                         early_stop_patience=args.early_stop_patience,
                         num_workers_dl=args.num_workers_dl,
@@ -818,6 +898,7 @@ def main() -> None:
                         confusion_group=confusion_group,
                         figures_dir=figures_dir,
                         method=args.vectorization_method,
+                        grid_mode_label=grid_mode_label,
                     )
                 )
 
@@ -835,26 +916,17 @@ def main() -> None:
             if not shuffle_keys:
                 continue
 
-            logreg_acc = [float(shuf_results[s]["models"]["logreg"].get("mean_acc", shuf_results[s]["models"]["logreg"].get("accuracy", 0.0))) for s in shuffle_keys]
-            logreg_f1 = [float(shuf_results[s]["models"]["logreg"].get("mean_f1", shuf_results[s]["models"]["logreg"].get("macro_f1", 0.0))) for s in shuffle_keys]
-            cnn3d_acc = [float(shuf_results[s]["models"]["cnn3d"].get("mean_acc", shuf_results[s]["models"]["cnn3d"].get("accuracy", 0.0))) for s in shuffle_keys]
-            cnn3d_f1 = [float(shuf_results[s]["models"]["cnn3d"].get("mean_f1", shuf_results[s]["models"]["cnn3d"].get("macro_f1", 0.0))) for s in shuffle_keys]
-
+            _all_model_keys = ["logreg", "mlp", "cnn1d", "cnn3d"]
             avg_models = {
-                "logreg": {
-                    "mean_acc": float(np.mean(logreg_acc)),
-                    "std_acc": float(np.std(logreg_acc)),
-                    "mean_f1": float(np.mean(logreg_f1)),
-                    "std_f1": float(np.std(logreg_f1)),
-                },
-                "cnn3d": {
-                    "mean_acc": float(np.mean(cnn3d_acc)),
-                    "std_acc": float(np.std(cnn3d_acc)),
-                    "mean_f1": float(np.mean(cnn3d_f1)),
-                    "std_f1": float(np.std(cnn3d_f1)),
-                },
+                mk: {
+                    "mean_acc": float(np.mean([float(shuf_results[s]["models"][mk]["mean_acc"]) for s in shuffle_keys])),
+                    "std_acc": float(np.std([float(shuf_results[s]["models"][mk]["mean_acc"]) for s in shuffle_keys])),
+                    "mean_f1": float(np.mean([float(shuf_results[s]["models"][mk]["mean_f1"]) for s in shuffle_keys])),
+                    "std_f1": float(np.std([float(shuf_results[s]["models"][mk]["mean_f1"]) for s in shuffle_keys])),
+                }
+                for mk in _all_model_keys
             }
-            best_model = max(["logreg", "cnn3d"], key=lambda m: avg_models[m]["mean_f1"])
+            best_model = max(_all_model_keys, key=lambda m: avg_models[m]["mean_f1"])
 
             first_row = shuf_results[shuffle_keys[0]]
             avg_per_mouse[mouse_name] = {
@@ -871,13 +943,14 @@ def main() -> None:
             }
 
             labels_order = list(shuf_cms[shuffle_keys[0]]["labels"])
-            cm_logreg_stack = np.stack([np.asarray(shuf_cms[s]["cms"]["logreg"], dtype=float) for s in shuffle_keys], axis=0)
-            cm_cnn3d_stack = np.stack([np.asarray(shuf_cms[s]["cms"]["cnn3d"], dtype=float) for s in shuffle_keys], axis=0)
             avg_cms[mouse_name] = {
                 "labels": labels_order,
                 "cms": {
-                    "logreg": np.mean(cm_logreg_stack, axis=0),
-                    "cnn3d": np.mean(cm_cnn3d_stack, axis=0),
+                    mk: np.mean(
+                        np.stack([np.asarray(shuf_cms[s]["cms"][mk], dtype=float) for s in shuffle_keys], axis=0),
+                        axis=0,
+                    )
+                    for mk in _all_model_keys
                 },
                 "best_model": best_model,
             }
@@ -890,6 +963,7 @@ def main() -> None:
                     confusion_group=avg_cms,
                     figures_dir=figures_dir,
                     method=args.vectorization_method,
+                    grid_mode_label=grid_mode_label,
                 )
             )
 
@@ -903,6 +977,7 @@ def main() -> None:
             "shuffle_type": args.shuffle_type,
             "different_shuffle_per_trial": args.different_shuffle_per_trial,
             "shuffle_mode": mode_token,
+            "normalize_grids": args.normalize_grids,
             "n_shuffles_requested": args.n_shuffles,
             "seed": args.seed,
             "eligible_mice": eligible_mice,
@@ -919,6 +994,7 @@ def main() -> None:
             writer.writerow([
                 "shuffle_mode",
                 "different_shuffle_per_trial",
+                "normalize_grids",
                 "mouse", "shuffle_id", "model",
                 "n_trials", "cv_folds",
                 "mean_acc", "std_acc", "mean_f1", "std_f1",
@@ -926,20 +1002,21 @@ def main() -> None:
             ])
             for mouse_name, shuf_results in all_results.items():
                 for shuffle_id, row in shuf_results.items():
-                    for mk in ["logreg", "cnn3d"]:
+                    for mk in ["logreg", "mlp", "cnn1d", "cnn3d"]:
                         mr = row["models"][mk]
                         writer.writerow([
                             mode_token,
                             args.different_shuffle_per_trial,
+                            args.normalize_grids,
                             mouse_name,
                             shuffle_id,
                             mk,
                             row["n_trials"],
                             row["cv_folds"],
-                            mr.get("mean_acc", mr.get("accuracy")),
-                            mr.get("std_acc", 0),
-                            mr.get("mean_f1", mr.get("macro_f1")),
-                            mr.get("std_f1", 0),
+                            mr["mean_acc"],
+                            mr["std_acc"],
+                            mr["mean_f1"],
+                            mr["std_f1"],
                             row["best_model"],
                         ])
         print(f"Wrote CSV : {csv_path}")

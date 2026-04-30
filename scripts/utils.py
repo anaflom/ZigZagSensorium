@@ -328,6 +328,50 @@ def load_vectorization_cache(cache_path: Path) -> Dict[str, Any]:
     return out
 
 
+def build_shuffled_grid_cache_dir(cache_root: Path, cache_stem: str) -> Path:
+    """Return the directory that stores shuffled grid files for one cache stem."""
+    return Path(cache_root) / f"{cache_stem}_grids"
+
+
+def build_shuffled_grid_cache_path(cache_root: Path, cache_stem: str, trial_id: int) -> Path:
+    """Return the per-trial shuffled grid cache path for a shuffle cache stem."""
+    grid_dir = build_shuffled_grid_cache_dir(cache_root, cache_stem)
+    return grid_dir / f"trial_{int(trial_id):06d}.npy"
+
+
+def load_shuffled_grid_cache_paths(cache_path: Path, trial_ids: Sequence[int]) -> List[Path]:
+    """Resolve shuffled grid cache files for the provided trial IDs.
+
+    Raises
+    ------
+    FileNotFoundError
+        If the shuffled grid cache directory or any trial file is missing.
+    """
+    cache_path = Path(cache_path)
+    grid_dir = build_shuffled_grid_cache_dir(cache_path.parent, cache_path.stem)
+    if not grid_dir.exists():
+        raise FileNotFoundError(
+            f"Shuffled grid cache directory not found for {cache_path.name}: {grid_dir}"
+        )
+
+    grid_paths: List[Path] = []
+    missing: List[Path] = []
+    for trial_id in trial_ids:
+        grid_path = build_shuffled_grid_cache_path(cache_path.parent, cache_path.stem, int(trial_id))
+        if not grid_path.exists():
+            missing.append(grid_path)
+        grid_paths.append(grid_path)
+
+    if missing:
+        raise FileNotFoundError(
+            "Missing shuffled grid cache files: "
+            + ", ".join(str(path.name) for path in missing[:5])
+            + (" ..." if len(missing) > 5 else "")
+        )
+
+    return grid_paths
+
+
 def create_vectorization(
     barcodes: List[List[Tuple[float, float, float]]],
     method: str,

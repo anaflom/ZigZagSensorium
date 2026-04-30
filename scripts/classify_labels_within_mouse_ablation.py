@@ -69,6 +69,7 @@ class RunState:
     mice: Optional[List[str]]
     clip_frames: Optional[int]
     grid_subdir: str
+    normalize_grids: bool
     cache_dir: Optional[Path]
     n_splits: int
     max_trials: Optional[int]
@@ -137,9 +138,12 @@ def run_pipeline(state: RunState) -> Dict[str, object]:
         print(f"  mice:              {state.mice}")
         print(f"  clip_frames:       {state.clip_frames}")
         print(f"  grid_subdir:       {state.grid_subdir}")
+        print(f"  normalize_grids:   {state.normalize_grids}")
         print(f"  n_splits:          {state.n_splits}")
         print(f"  max_trials:        {state.max_trials}")
         print(f"  device:            {device}")
+
+        grid_mode_label = "trial-l1-normalized-grid" if state.normalize_grids else "raw-grid"
 
         discovered_mice = _discover_mice(state.data_root)
         selected_mice = state.mice if state.mice is not None else discovered_mice
@@ -322,6 +326,7 @@ def run_pipeline(state: RunState) -> Dict[str, object]:
                     y=y_int,
                     valid_frames=grid_frames_common,
                     clip_frames=int(clip_used),
+                    normalize_by_trial=state.normalize_grids,
                 )
 
                 def build_grid_dataset(train_idx: np.ndarray, val_idx: np.ndarray):
@@ -437,14 +442,14 @@ def run_pipeline(state: RunState) -> Dict[str, object]:
 
         ax_f1.set_ylim(0, 1.05)
         ax_f1.set_ylabel("Macro-F1")
-        ax_f1.set_title(f"Within-mouse ablation by mouse ({state.method})")
+        ax_f1.set_title(f"Within-mouse ablation by mouse ({state.method}, {grid_mode_label})")
         ax_f1.grid(axis="y", alpha=0.25)
         ax_f1.legend(loc="upper right", ncol=2, fontsize=8)
         ax_acc.set_xticks(x)
         ax_acc.set_xticklabels([_short_mouse_name(m) for m in mice_order], rotation=30, ha="right", fontsize=8)
         ax_acc.set_ylim(0, 1.05)
         ax_acc.set_ylabel("Accuracy")
-        ax_acc.set_title(f"Within-mouse ablation accuracy by mouse ({state.method})")
+        ax_acc.set_title(f"Within-mouse ablation accuracy by mouse ({state.method}, {grid_mode_label})")
         ax_acc.grid(axis="y", alpha=0.25)
         fig.tight_layout()
         fig1 = figures_dir / "01_ablation_macro_f1_by_mouse.png"
@@ -464,7 +469,7 @@ def run_pipeline(state: RunState) -> Dict[str, object]:
         axes[0].set_xticklabels([model_titles[m] for m in model_order], rotation=25, ha="right", fontsize=8)
         axes[0].set_ylim(0, 1.05)
         axes[0].set_ylabel("Accuracy")
-        axes[0].set_title("Mean accuracy across mice")
+        axes[0].set_title(f"Mean accuracy across mice ({grid_mode_label})")
         axes[0].grid(axis="y", alpha=0.25)
 
         axes[1].bar(np.arange(len(model_order)), mean_f1, yerr=std_f1, capsize=4, color=[colors[m] for m in model_order], alpha=0.85)
@@ -472,7 +477,7 @@ def run_pipeline(state: RunState) -> Dict[str, object]:
         axes[1].set_xticklabels([model_titles[m] for m in model_order], rotation=25, ha="right", fontsize=8)
         axes[1].set_ylim(0, 1.05)
         axes[1].set_ylabel("Macro-F1")
-        axes[1].set_title("Mean macro-F1 across mice")
+        axes[1].set_title(f"Mean macro-F1 across mice ({grid_mode_label})")
         axes[1].grid(axis="y", alpha=0.25)
 
         fig.tight_layout()
@@ -512,7 +517,10 @@ def run_pipeline(state: RunState) -> Dict[str, object]:
                     title += " ★"
                 ax.set_title(title, fontsize=7)
 
-        fig.suptitle("Normalized confusion matrices — all classifiers per mouse (★ = best)", fontsize=11)
+        fig.suptitle(
+            f"Normalized confusion matrices — all classifiers per mouse ({grid_mode_label}, ★ = best)",
+            fontsize=11,
+        )
         fig.tight_layout()
         fig3 = figures_dir / "03_all_classifier_confusion_matrices.png"
         fig.savefig(fig3, dpi=300, bbox_inches="tight")
@@ -560,6 +568,7 @@ def run_pipeline(state: RunState) -> Dict[str, object]:
             "per_trial_thresh": state.per_trial_thresh,
             "zz_folder": state.zz_folder,
             "grid_subdir": state.grid_subdir,
+            "normalize_grids": state.normalize_grids,
             "mice": mice_order,
             "results": per_mouse,
             "models": model_order,
@@ -584,6 +593,7 @@ def run_pipeline(state: RunState) -> Dict[str, object]:
                 [
                     "mouse",
                     "method",
+                    "normalize_grids",
                     "model",
                     "input",
                     "n_trials",
@@ -607,6 +617,7 @@ def run_pipeline(state: RunState) -> Dict[str, object]:
                         [
                             mouse_name,
                             state.method,
+                            state.normalize_grids,
                             mk,
                             "grid" if mk == "cnn3d" else "vector",
                             row["n_trials"],
@@ -655,6 +666,7 @@ def build_arg_parser() -> argparse.ArgumentParser:
     parser.add_argument("--mice", default=None, type=_opt_csv_list)
     parser.add_argument("--clip-frames", default=None, type=_opt_int)
     parser.add_argument("--grid-subdir", default="trials_grid")
+    parser.add_argument("--normalize-grids", default=False, type=_str2bool)
     parser.add_argument(
         "--cache-dir",
         default=None,
@@ -697,6 +709,7 @@ def main() -> int:
         mice=args.mice,
         clip_frames=args.clip_frames,
         grid_subdir=args.grid_subdir,
+        normalize_grids=args.normalize_grids,
         cache_dir=args.cache_dir,
         n_splits=args.n_splits,
         max_trials=args.max_trials,
