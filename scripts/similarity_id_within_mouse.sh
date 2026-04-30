@@ -28,20 +28,20 @@
 #   7. Save distance matrices and generate visualizations
 #
 # Usage examples:
-#   sbatch scripts/analyze_within_mouse_id_similarity.sh
+#   sbatch scripts/similarity_id_within_mouse.sh
 #
 #   sbatch --export=MICE=dynamic29156-11-10-Video-8744edeac3b4d1ce16b680916b5267ce,N_PCA_COMPONENTS=None \
-#          scripts/analyze_within_mouse_id_similarity.sh
+#          scripts/similarity_id_within_mouse.sh
 #
 #   sbatch --export=VECTORIZATION_METHOD=Turnover,MIN_ID_REPETITIONS=7,N_PCA_COMPONENTS=15 \
-#          scripts/analyze_within_mouse_id_similarity.sh
+#          scripts/similarity_id_within_mouse.sh
 # ============================================================================
 
 set -euo pipefail
 
 # --- Configuration -----------------------------------------------------------
 PROJECT_DIR="/u/mdmc/anaflom/projects_mdmc/ZigZagSensorium"
-SCRIPT="${PROJECT_DIR}/scripts/analyze_within_mouse_id_similarity.py"
+SCRIPT="${PROJECT_DIR}/scripts/similarity_id_within_mouse.py"
 VENV_DIR="${PROJECT_DIR}/.venv-genoa"
 
 DATA_ROOT="${DATA_ROOT:-/orfeo/scratch/area/ygardinazzi/sensorium_2026/derivatives/grid-15x15x10_norm-by_minmax}"

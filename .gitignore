@@ -10,6 +10,7 @@ env/
 
 # Notebooks
 .ipynb_checkpoints/
+notebooks/figures/
 notebooks/test*.ipynb
 notebooks/.ipynb_checkpoints/
 notebooks/cache/
@@ -19,6 +20,9 @@ results/
 
 # Tests
 tests/
+
+# Figure regenerations
+figure_regeneration/
 
 # IDE
 .vscode/
