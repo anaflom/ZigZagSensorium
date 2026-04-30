@@ -65,7 +65,6 @@ class RunState:
     mice: Optional[List[str]]
     clip_frames: Optional[int]
     cache_dir: Optional[Path]
-    force_recompute: bool
     max_trials: Optional[int]
     min_id_repetitions: int
     n_pca_components: Optional[int]
@@ -120,7 +119,6 @@ def parse_arguments() -> argparse.Namespace:
     )
     parser.add_argument("--clip-frames", type=_opt_int, default=None, help="Clip frames")
     parser.add_argument("--cache-dir", type=lambda x: Path(x) if x else None, default=None, help="Cache folder")
-    parser.add_argument("--force-recompute", type=_str2bool, default=False, help="Force recompute cache")
     parser.add_argument("--max-trials", type=_opt_int, default=None, help="Max trials per mouse")
 
     # Mouse selection
@@ -158,25 +156,25 @@ def filter_to_repeated_trials(
     """Filter metadata to trials with repeated IDs and eligible status.
     
     Args:
-        df_meta: Metadata DataFrame with columns including 'ID', 'trial', 'valid_trial', 'valid_response'
+        df_meta: Metadata DataFrame with columns including 'video_ID', 'trial', 'valid_trial', 'valid_response'
         min_id_repetitions: Minimum number of repetitions for an ID to be kept
         
     Returns:
         Filtered DataFrame containing only eligible trials with repeated IDs
     """
     # Check if required columns exist
-    if "ID" not in df_meta.columns:
-        raise ValueError(f"Metadata must contain 'ID' column. Found columns: {df_meta.columns.tolist()}")
+    if "video_ID" not in df_meta.columns:
+        raise ValueError(f"Metadata must contain 'video_ID' column. Found columns: {df_meta.columns.tolist()}")
     
     # Apply eligibility filter first (same as in load_labelled_barcodes)
     df_eligible = _eligible_trials(df_meta)
     
     # Group by ID and count occurrences (on eligible trials only)
-    id_counts = df_eligible["ID"].value_counts()
+    id_counts = df_eligible["video_ID"].value_counts()
     repeated_ids = id_counts[id_counts >= min_id_repetitions].index.tolist()
     
     # Filter to repeated IDs
-    df_filtered = df_eligible[df_eligible["ID"].isin(repeated_ids)].copy()
+    df_filtered = df_eligible[df_eligible["video_ID"].isin(repeated_ids)].copy()
     
     return df_filtered
 
@@ -213,7 +211,7 @@ def prepare_label_data(
     
     # Build trial_to_id mapping from filtered metadata
     df_meta_label_trials = df_meta_filtered[df_meta_filtered["trial"].isin(trial_ids_label_all)].copy()
-    trial_to_id = dict(zip(df_meta_label_trials["trial"].astype(int), df_meta_label_trials["ID"]))
+    trial_to_id = dict(zip(df_meta_label_trials["trial"].astype(int), df_meta_label_trials["video_ID"]))
     
     # Keep only trials that are in the filtered metadata (have repeated IDs)
     indices_to_keep = []
@@ -642,8 +640,8 @@ def run_pipeline(state: RunState) -> Dict[str, Any]:
             print(f"  Metadata: {len(df_meta)} rows")
             
             # Check for ID column
-            if "ID" not in df_meta.columns:
-                print(f"  ERROR: Metadata missing 'ID' column. Skipping.")
+            if "video_ID" not in df_meta.columns:
+                print(f"  ERROR: Metadata missing 'video_ID' column. Skipping.")
                 continue
             
             # Filter to repeated trials
@@ -689,7 +687,6 @@ def run_pipeline(state: RunState) -> Dict[str, Any]:
                 trial_ids=trial_ids,
                 valid_frames=valid_frames,
                 cache_dir=_resolve_mouse_cache_dir(state, mouse_name),
-                force_recompute=state.force_recompute,
             )
             if vec_source == "cache":
                 print(f"  Using cached vectorization")
@@ -797,6 +794,8 @@ def run_pipeline(state: RunState) -> Dict[str, Any]:
                 plot_id_distance_heatmap_all_labels(id_heatmap_blocks, id_heatmap_path)
                 print(f"  Saved combined ID distance heatmap: {id_heatmap_path}")
         
+        except RuntimeError:
+            raise
         except Exception as exc:
             print(f"  FAILED: {exc}")
             traceback.print_exc()
@@ -837,7 +836,6 @@ def main() -> int:
             mice=args.mice,
             clip_frames=args.clip_frames,
             cache_dir=args.cache_dir,
-            force_recompute=args.force_recompute,
             max_trials=args.max_trials,
             min_id_repetitions=args.min_id_repetitions,
             n_pca_components=args.n_pca_components,

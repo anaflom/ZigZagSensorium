@@ -32,13 +32,13 @@
 #       message ("Not enough samples per class for CV").
 #
 # Usage examples:
-#   sbatch scripts/classify_trials_within_mouse.sh
+#   sbatch scripts/classify_labels_within_mouse.sh
 #
 #   sbatch --export=P_ACTIVE=30,PER_TRIAL_THRESH=true,N_SPLITS=5 \
-#          scripts/classify_trials_within_mouse.sh
+#          scripts/classify_labels_within_mouse.sh
 #
 #   sbatch --export=METHOD=PersistenceImage,CLIP_FRAMES=240,N_SPLITS=3,MAX_TRIALS=100 \
-#          scripts/classify_trials_within_mouse.sh
+#          scripts/classify_labels_within_mouse.sh
 #
 # ============================================================================
 
@@ -46,7 +46,7 @@ set -euo pipefail
 
 # --- Configuration -----------------------------------------------------------
 PROJECT_DIR="/u/mdmc/anaflom/projects_mdmc/ZigZagSensorium"
-SCRIPT="${PROJECT_DIR}/scripts/classify_trials_within_mouse.py"
+SCRIPT="${PROJECT_DIR}/scripts/classify_labels_within_mouse.py"
 VENV_DIR="${PROJECT_DIR}/.venv-genoa"
 
 DATA_ROOT="${DATA_ROOT:-/orfeo/scratch/area/ygardinazzi/sensorium_2026/derivatives/grid-15x15x10_norm-by_minmax}"

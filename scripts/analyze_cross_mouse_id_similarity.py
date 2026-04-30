@@ -65,7 +65,6 @@ class RunState:
     mice: Optional[List[str]]
     clip_frames: Optional[int]
     cache_dir: Optional[Path]
-    force_recompute: bool
     max_trials: Optional[int]
     min_id_repetitions: int
     n_pca_components: Optional[int]
@@ -96,7 +95,6 @@ def parse_arguments() -> argparse.Namespace:
     )
     parser.add_argument("--clip-frames", type=_opt_int, default=None)
     parser.add_argument("--cache-dir", type=lambda x: Path(x) if x else None, default=None)
-    parser.add_argument("--force-recompute", type=_str2bool, default=False)
     parser.add_argument("--max-trials", type=_opt_int, default=None)
     parser.add_argument(
         "--mice", type=_opt_csv_list, default=None,
@@ -121,14 +119,14 @@ def _filter_to_repeated_eligible(
     df_meta: pd.DataFrame,
     min_id_repetitions: int,
 ) -> pd.DataFrame:
-    if "ID" not in df_meta.columns:
+    if "video_ID" not in df_meta.columns:
         raise ValueError(
-            f"Metadata missing 'ID' column. Found: {df_meta.columns.tolist()}"
+            f"Metadata missing 'video_ID' column. Found: {df_meta.columns.tolist()}"
         )
     df_elig = _eligible_trials(df_meta)
-    id_counts = df_elig["ID"].value_counts()
+    id_counts = df_elig["video_ID"].value_counts()
     repeated_ids = id_counts[id_counts >= min_id_repetitions].index
-    return df_elig[df_elig["ID"].isin(repeated_ids)].copy()
+    return df_elig[df_elig["video_ID"].isin(repeated_ids)].copy()
 
 
 def _load_mouse(state: RunState, mouse_name: str) -> Optional[Dict[str, Any]]:
@@ -138,8 +136,8 @@ def _load_mouse(state: RunState, mouse_name: str) -> Optional[Dict[str, Any]]:
         print(f"  [{mouse_name}] Metadata not found: {exc}")
         return None
 
-    if "ID" not in df_meta.columns:
-        print(f"  [{mouse_name}] No 'ID' column — skipping.")
+    if "video_ID" not in df_meta.columns:
+        print(f"  [{mouse_name}] No 'video_ID' column — skipping.")
         return None
 
     df_filtered = _filter_to_repeated_eligible(df_meta, state.min_id_repetitions)
@@ -169,7 +167,6 @@ def _load_mouse(state: RunState, mouse_name: str) -> Optional[Dict[str, Any]]:
         trial_ids=trial_ids,
         valid_frames=valid_frames,
         cache_dir=_resolve_mouse_cache_dir(state, mouse_name),
-        force_recompute=state.force_recompute,
     )
     if vec_source == "cache":
         print(f"  [{mouse_name}] Using cached vectorization.")
@@ -181,7 +178,7 @@ def _load_mouse(state: RunState, mouse_name: str) -> Optional[Dict[str, Any]]:
         "labels": labels,
         "trial_ids": [int(t) for t in trial_ids],
         "df_filtered": df_filtered,
-        "id_set": set(df_filtered["ID"].unique()),
+        "id_set": set(df_filtered["video_ID"].unique()),
         "clip_frames": clip_used,
     }
 
@@ -201,7 +198,7 @@ def _select_trials_for_label(
     if not tids_all:
         return None
 
-    trial_to_id = dict(zip(df_filt["trial"].astype(int), df_filt["ID"]))
+    trial_to_id = dict(zip(df_filt["trial"].astype(int), df_filt["video_ID"]))
 
     keep_idx, keep_tids, keep_ids = [], [], []
     for i, tid in enumerate(tids_all):
@@ -562,8 +559,8 @@ def _analyse_pair(
 
     df1 = data1["df_filtered"]
     df2 = data2["df_filtered"]
-    labels1 = set(df1[df1["ID"].isin(common_ids)]["label"].unique())
-    labels2 = set(df2[df2["ID"].isin(common_ids)]["label"].unique())
+    labels1 = set(df1[df1["video_ID"].isin(common_ids)]["label"].unique())
+    labels2 = set(df2[df2["video_ID"].isin(common_ids)]["label"].unique())
     shared_labels = sorted(labels1 & labels2)
 
     if not shared_labels:
@@ -840,7 +837,6 @@ def main() -> int:
             mice=args.mice,
             clip_frames=args.clip_frames,
             cache_dir=args.cache_dir,
-            force_recompute=args.force_recompute,
             max_trials=args.max_trials,
             min_id_repetitions=args.min_id_repetitions,
             n_pca_components=args.n_pca_components,

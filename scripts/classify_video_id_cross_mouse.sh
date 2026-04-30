@@ -4,65 +4,49 @@
 #
 # SPDX-License-Identifier: BSD-3-Clause
 
-#SBATCH --job-name=zz-within-shuf
+#SBATCH --job-name=zz-cross-id-dec
 #SBATCH --partition=GPU
 #SBATCH --account=MDMC
 #SBATCH --gres=gpu:V100:1
 #SBATCH --cpus-per-task=8
 #SBATCH --mem=200G
 #SBATCH --time=12:00:00
-#SBATCH --output=logs/slurm-zz-within-shuf-%j.out
-#SBATCH --error=logs/slurm-zz-within-shuf-%j.err
+#SBATCH --output=logs/slurm-zz-cross-id-dec-%j.out
+#SBATCH --error=logs/slurm-zz-cross-id-dec-%j.err
 
 # ============================================================================
-# Within-mouse classification on pre-cached shuffled zigzag vectorizations.
+# Cross-mouse video ID decoding by label.
 #
-# Requires shuffles to have been generated first by:
-#   sbatch scripts/generate_trials_ablation_shuffle.sh
+# For each eligible mouse pair with common repeated IDs:
+#   - Evaluate both directions (A->B and B->A)
+#   - Train on source mouse and test on target mouse
+#   - Models: LogReg (zigzag vectorization) and 3D-CNN (grid activations)
 #
-# Preflight checks are run before any training:
-#   - Each mouse must have >= N_SHUFFLES available randomizations.
-#   - Shuffles must have been generated with at least MAX_TRIALS trials.
-#   - N_SHUFFLES IDs are randomly sampled from the available pool (seeded).
-#
-# Usage examples:
-#   sbatch scripts/classify_trials_within_mouse_ablation_shuffle.sh
-#
-#   sbatch --export=N_SHUFFLES=10,SHUFFLE_TYPE=time,SEED=0 \
-#          scripts/classify_trials_within_mouse_ablation_shuffle.sh
+# Pair eligibility uses metadata with valid_trial & valid_response == True,
+# keeping IDs repeated at least MIN_ID_REPETITIONS in each mouse.
 # ============================================================================
 
 set -euo pipefail
 
-# --- Configuration -----------------------------------------------------------
 PROJECT_DIR="/u/mdmc/anaflom/projects_mdmc/ZigZagSensorium"
-SCRIPT="${PROJECT_DIR}/scripts/classify_trials_within_mouse_ablation_shuffle.py"
-VENV_DIR="${PROJECT_DIR}/.venv-gpu"
+SCRIPT="${PROJECT_DIR}/scripts/classify_video_id_cross_mouse.py"
+VENV_DIR="${VENV_DIR:-${PROJECT_DIR}/.venv-gpu}"
 
 DATA_ROOT="${DATA_ROOT:-/orfeo/scratch/area/ygardinazzi/sensorium_2026/derivatives/grid-15x15x10_norm-by_minmax}"
 META_ROOT="${META_ROOT:-/u/mdmc/anaflom/projects_mdmc/sensorium/metadata}"
 
-# Mouse selection
-MICE="${MICE:-None}"
-
-# Shuffle parameters
-N_SHUFFLES="${N_SHUFFLES:-3}"
-SHUFFLE_TYPE="${SHUFFLE_TYPE:-time}"
-SEED="${SEED:-42}"
-
-# Vectorization parameters (must match generation)
 P_ACTIVE="${P_ACTIVE:-30}"
 PER_TRIAL_THRESH="${PER_TRIAL_THRESH:-true}"
 VECTORIZATION_METHOD="${VECTORIZATION_METHOD:-Turnover}"
+MICE="${MICE:-None}"
 CLIP_FRAMES="${CLIP_FRAMES:-240}"
 MAX_TRIALS="${MAX_TRIALS:-None}"
 GRID_SUBDIR="${GRID_SUBDIR:-trials_grid}"
-MAX_DIM="${MAX_DIM:-2}"
-
-# Cache
 CACHE_DIR="${CACHE_DIR:-}"
 
-# Training parameters
+MIN_ID_REPETITIONS="${MIN_ID_REPETITIONS:-5}"
+SEED="${SEED:-42}"
+
 BATCH_SIZE_GRID="${BATCH_SIZE_GRID:-16}"
 EPOCHS_CNN3D="${EPOCHS_CNN3D:-40}"
 LR_CNN3D="${LR_CNN3D:-0.0005}"
@@ -78,14 +62,15 @@ else
   OUTPUT_SUFFIX="global"
 fi
 
-OUTPUT_BASE="${OUTPUT_BASE:-${PROJECT_DIR}/results/ablation_shuffle/${SHUFFLE_TYPE}/p${P_ACTIVE}-${OUTPUT_SUFFIX}}"
+OUTPUT_BASE="${OUTPUT_BASE:-${PROJECT_DIR}/results/cross_mouse_id_decoding/p${P_ACTIVE}-${OUTPUT_SUFFIX}}"
 RUN_TS="$(date +%Y%m%d_%H%M%S)"
-RUN_TAG="within_p${P_ACTIVE}_method-${VECTORIZATION_METHOD}_shuffle-${SHUFFLE_TYPE}_nshuf-${N_SHUFFLES}_clip-${CLIP_FRAMES}_${RUN_TS}"
+RUN_TAG="p${P_ACTIVE}_method-${VECTORIZATION_METHOD}_minrep-${MIN_ID_REPETITIONS}_clip-${CLIP_FRAMES}_${RUN_TS}"
 RUN_TAG_SAFE="$(echo "${RUN_TAG}" | sed 's/[^a-zA-Z0-9._-]/_/g')"
 OUT_DIR="${OUTPUT_BASE}/${RUN_TAG_SAFE}"
 
-# --- Environment -------------------------------------------------------------
 mkdir -p "${PROJECT_DIR}/logs"
+mkdir -p "${OUTPUT_BASE}"
+
 source "${VENV_DIR}/bin/activate"
 export PYTHONUNBUFFERED=1
 
@@ -100,18 +85,22 @@ echo "Script        : ${SCRIPT}"
 echo "Data root     : ${DATA_ROOT}"
 echo "Meta root     : ${META_ROOT}"
 echo "Output dir    : ${OUT_DIR}"
-echo "Cache dir     : ${CACHE_DIR:-<data-root>/<mouse>/cache}"
+if [[ -n "${CACHE_DIR}" ]]; then
+  echo "Cache dir override: ${CACHE_DIR}"
+else
+  echo "Cache dir: <data-root>/<mouse>/cache"
+fi
 echo "============================================"
-echo "N_SHUFFLES    : ${N_SHUFFLES}"
-echo "SHUFFLE_TYPE  : ${SHUFFLE_TYPE}"
-echo "SEED          : ${SEED}"
-echo "============================================"
-echo "VECTORIZATION : ${VECTORIZATION_METHOD}"
 echo "P_ACTIVE      : ${P_ACTIVE}"
 echo "PER_TRIAL_THRESH : ${PER_TRIAL_THRESH}"
+echo "VECTORIZATION : ${VECTORIZATION_METHOD}"
+echo "MICE          : ${MICE}"
 echo "CLIP_FRAMES   : ${CLIP_FRAMES}"
 echo "MAX_TRIALS    : ${MAX_TRIALS}"
-echo "MICE          : ${MICE}"
+echo "GRID_SUBDIR   : ${GRID_SUBDIR}"
+echo "============================================"
+echo "MIN_ID_REPETITIONS : ${MIN_ID_REPETITIONS}"
+echo "SEED          : ${SEED}"
 echo "============================================"
 echo "BATCH_SIZE    : ${BATCH_SIZE_GRID}"
 echo "EPOCHS_CNN3D  : ${EPOCHS_CNN3D}"
@@ -121,20 +110,17 @@ echo "PATIENCE      : ${EARLY_STOP_PATIENCE}"
 echo "DEVICE        : ${DEVICE}"
 echo "============================================"
 
-# --- Build command -----------------------------------------------------------
 CMD=(
   python3 -u "${SCRIPT}"
   --output-folder "${OUT_DIR}"
   --data-root "${DATA_ROOT}"
   --meta-root "${META_ROOT}"
-  --n-shuffles "${N_SHUFFLES}"
-  --shuffle-type "${SHUFFLE_TYPE}"
-  --seed "${SEED}"
   --p-active "${P_ACTIVE}"
   --per-trial-thresh "${PER_TRIAL_THRESH}"
   --vectorization-method "${VECTORIZATION_METHOD}"
   --grid-subdir "${GRID_SUBDIR}"
-  --max-dim "${MAX_DIM}"
+  --min-id-repetitions "${MIN_ID_REPETITIONS}"
+  --seed "${SEED}"
   --batch-size-grid "${BATCH_SIZE_GRID}"
   --epochs-cnn3d "${EPOCHS_CNN3D}"
   --lr-cnn3d "${LR_CNN3D}"
@@ -168,7 +154,7 @@ echo ""
 echo ""
 
 mkdir -p "${OUT_DIR}"
-echo "Starting within-mouse shuffle classification ..."
+echo "Starting cross-mouse ID decoding ..."
 "${CMD[@]}"
 EXIT_CODE=$?
 

@@ -9,6 +9,7 @@
 from __future__ import annotations
 
 import argparse
+import json
 import re
 from pathlib import Path
 from typing import Any, Dict, Iterable, List, Optional, Sequence, Tuple
@@ -402,6 +403,68 @@ def create_vectorization(
     return result
 
 
+def compute_and_save_vectorization_cache(
+    *,
+    data_root: Path,
+    mouse_name: str,
+    method: str,
+    p_active: int,
+    per_trial_thresh: bool,
+    clip_frames: Optional[int],
+    barcodes: Sequence[Sequence[Tuple[float, float, float]]],
+    labels: Optional[Sequence[str]],
+    trial_ids: Optional[Sequence[int]],
+    valid_frames: Optional[Sequence[int]],
+    cache_dir: Optional[Path] = None,
+) -> Tuple[np.ndarray, Path]:
+    """Compute vectorization features and persist a cache file."""
+    clip_used = int(clip_frames) if clip_frames is not None else None
+    cache_stem = build_vectorization_cache_stem(
+        mouse_name=mouse_name,
+        method=method,
+        p_active=p_active,
+        per_trial_thresh=per_trial_thresh,
+        clip_frames=clip_used,
+    )
+    mouse_cache_dir = cache_dir if cache_dir is not None else data_root / mouse_name / "cache"
+    mouse_cache_dir.mkdir(parents=True, exist_ok=True)
+    cache_path = mouse_cache_dir / f"{cache_stem}.npz"
+
+    vec_out = create_vectorization(
+        list(barcodes),
+        method,
+        clip_frames=clip_used,
+        output_folder=mouse_cache_dir,
+        cache_stem=cache_stem,
+        mouse_name=mouse_name,
+        labels=None if labels is None else np.asarray(labels),
+        trial_ids=trial_ids,
+        valid_frames=None if valid_frames is None else np.asarray(valid_frames),
+    )
+    xmat = np.asarray(vec_out["features"])
+    return xmat, cache_path
+
+
+def _build_vectorization_precompute_hint(
+    *,
+    mouse_name: str,
+    method: str,
+    p_active: int,
+    per_trial_thresh: bool,
+    clip_frames: Optional[int],
+) -> str:
+    clip_token = "None" if clip_frames is None else str(int(clip_frames))
+    return (
+        "Compute it first with: "
+        "python3 scripts/generate_vectorization_cache.py "
+        f"--mice {mouse_name} "
+        f"--vectorization-method {method} "
+        f"--p-active {int(p_active)} "
+        f"--per-trial-thresh {'true' if per_trial_thresh else 'false'} "
+        f"--clip-frames {clip_token}"
+    )
+
+
 def load_or_compute_vectorization_features(
     *,
     data_root: Path,
@@ -409,7 +472,7 @@ def load_or_compute_vectorization_features(
     method: str,
     p_active: int,
     per_trial_thresh: bool,
-    clip_frames: int,
+    clip_frames: Optional[int],
     barcodes: Sequence[Sequence[Tuple[float, float, float]]],
     labels: Optional[Sequence[str]],
     trial_ids: Optional[Sequence[int]],
@@ -419,79 +482,100 @@ def load_or_compute_vectorization_features(
     expected_trial_ids: Optional[Sequence[int]] = None,
     message_prefix: str = "",
 ) -> Tuple[np.ndarray, str, Path]:
-    """Load vectorization features from cache or compute them.
+    """Strictly load vectorization features from cache.
 
-    If ``expected_trial_ids`` is provided, cached features are validated against
-    those trial ids when available.
+    This helper no longer computes vectorizations on cache miss. Use
+    scripts/generate_vectorization_cache.py to precompute missing caches.
     """
+    clip_used = int(clip_frames) if clip_frames is not None else None
     cache_stem = build_vectorization_cache_stem(
         mouse_name=mouse_name,
         method=method,
         p_active=p_active,
         per_trial_thresh=per_trial_thresh,
-        clip_frames=int(clip_frames),
+        clip_frames=clip_used,
     )
     mouse_cache_dir = cache_dir if cache_dir is not None else data_root / mouse_name / "cache"
-    mouse_cache_dir.mkdir(parents=True, exist_ok=True)
     cache_path = mouse_cache_dir / f"{cache_stem}.npz"
 
-    use_cache = False
-    if cache_path.exists() and not force_recompute:
-        cache = load_vectorization_cache(cache_path)
-        if "features" in cache:
-            xmat = np.asarray(cache["features"])
-        elif "X" in cache:
-            xmat = np.asarray(cache["X"])
-        else:
-            raise RuntimeError(f"Cache missing feature matrix: {cache_path}")
-        xmat = np.nan_to_num(xmat)
+    if force_recompute:
+        raise RuntimeError(
+            f"{message_prefix}force_recompute=True is not supported in strict cache mode. "
+            + _build_vectorization_precompute_hint(
+                mouse_name=mouse_name,
+                method=method,
+                p_active=p_active,
+                per_trial_thresh=per_trial_thresh,
+                clip_frames=clip_used,
+            )
+            + " and pass --force-recompute true there."
+        )
 
-        if expected_trial_ids is not None:
-            expected = [int(t) for t in expected_trial_ids]
-            cache_trial_ids: Optional[List[int]] = None
-            if "trial_ids" in cache:
-                cache_trial_ids = [int(t) for t in np.asarray(cache["trial_ids"]).tolist()]
+    if not cache_path.exists():
+        raise RuntimeError(
+            f"{message_prefix}Missing vectorization cache: {cache_path}. "
+            + _build_vectorization_precompute_hint(
+                mouse_name=mouse_name,
+                method=method,
+                p_active=p_active,
+                per_trial_thresh=per_trial_thresh,
+                clip_frames=clip_used,
+            )
+        )
 
-            if cache_trial_ids is not None:
-                if len(cache_trial_ids) != int(xmat.shape[0]):
-                    print(
-                        f"{message_prefix}Cache mismatch: trial_ids length differs from feature rows; "
-                        "recomputing vectorization."
+    cache = load_vectorization_cache(cache_path)
+    if "features" in cache:
+        xmat = np.asarray(cache["features"])
+    elif "X" in cache:
+        xmat = np.asarray(cache["X"])
+    else:
+        raise RuntimeError(f"{message_prefix}Cache missing feature matrix: {cache_path}")
+    xmat = np.nan_to_num(xmat)
+
+    if expected_trial_ids is not None:
+        expected = [int(t) for t in expected_trial_ids]
+        cache_trial_ids: Optional[List[int]] = None
+        if "trial_ids" in cache:
+            cache_trial_ids = [int(t) for t in np.asarray(cache["trial_ids"]).tolist()]
+
+        if cache_trial_ids is not None:
+            if len(cache_trial_ids) != int(xmat.shape[0]):
+                raise RuntimeError(
+                    f"{message_prefix}Cache mismatch for {mouse_name}: trial_ids length "
+                    f"({len(cache_trial_ids)}) differs from feature rows ({int(xmat.shape[0])}) in {cache_path}. "
+                    + _build_vectorization_precompute_hint(
+                        mouse_name=mouse_name,
+                        method=method,
+                        p_active=p_active,
+                        per_trial_thresh=per_trial_thresh,
+                        clip_frames=clip_used,
                     )
-                elif cache_trial_ids != expected:
-                    print(
-                        f"{message_prefix}Cache mismatch: cached trial_ids differ from current trial_ids; "
-                        "recomputing vectorization."
+                )
+            if cache_trial_ids != expected:
+                raise RuntimeError(
+                    f"{message_prefix}Cache mismatch for {mouse_name}: cached trial_ids differ from current trials in {cache_path}. "
+                    + _build_vectorization_precompute_hint(
+                        mouse_name=mouse_name,
+                        method=method,
+                        p_active=p_active,
+                        per_trial_thresh=per_trial_thresh,
+                        clip_frames=clip_used,
                     )
-                else:
-                    use_cache = True
-            else:
-                if int(xmat.shape[0]) != len(expected):
-                    print(
-                        f"{message_prefix}Cache mismatch: feature rows differ from current trials and "
-                        "cache has no trial_ids; recomputing vectorization."
-                    )
-                else:
-                    use_cache = True
-        else:
-            use_cache = True
+                )
+        elif int(xmat.shape[0]) != len(expected):
+            raise RuntimeError(
+                f"{message_prefix}Cache mismatch for {mouse_name}: feature rows ({int(xmat.shape[0])}) differ "
+                f"from expected trial count ({len(expected)}) and cache has no trial_ids in {cache_path}. "
+                + _build_vectorization_precompute_hint(
+                    mouse_name=mouse_name,
+                    method=method,
+                    p_active=p_active,
+                    per_trial_thresh=per_trial_thresh,
+                    clip_frames=clip_used,
+                )
+            )
 
-        if use_cache:
-            return xmat, "cache", cache_path
-
-    vec_out = create_vectorization(
-        barcodes,
-        method,
-        clip_frames=int(clip_frames),
-        output_folder=mouse_cache_dir,
-        cache_stem=cache_stem,
-        mouse_name=mouse_name,
-        labels=labels,
-        trial_ids=trial_ids,
-        valid_frames=valid_frames,
-    )
-    xmat = np.asarray(vec_out["features"])
-    return xmat, "computed", cache_path
+    return xmat, "cache", cache_path
 
 
 def _discover_mice(data_root: Path) -> List[str]:
@@ -525,3 +609,282 @@ def _eligible_trials(df_trials: pd.DataFrame) -> pd.DataFrame:
     vr = _to_bool_series(df_trials["valid_response"])
     vt = _to_bool_series(df_trials["valid_trial"])
     return df_trials.loc[vr & vt].copy()
+
+
+def _normalize_video_id_token(video_id: Any) -> Optional[str]:
+    """Normalize metadata video ID to a filesystem token.
+
+    Returns None for missing/invalid IDs.
+    """
+    if video_id is None:
+        return None
+    if isinstance(video_id, float) and np.isnan(video_id):
+        return None
+    if pd.isna(video_id):
+        return None
+
+    text = str(video_id).strip()
+    if text == "":
+        return None
+
+    # Common CSV case: integer IDs loaded as float strings (e.g. "123.0").
+    m = re.fullmatch(r"([0-9]+)\.0+", text)
+    if m is not None:
+        return m.group(1)
+
+    return text
+
+
+def load_video_metadata_json(
+    meta_root: Path,
+    video_id: Any,
+    videos_subdir: str = "global_meta/videos",
+    label: Optional[str] = None,
+) -> Tuple[Optional[Dict[str, Any]], Optional[Path], Optional[str]]:
+    """Load one video metadata JSON by video ID.
+
+    Files are named ``<label>-<ID>.json`` under *videos_subdir*.  When *label*
+    is supplied the labelled form is tried first; plain ``<ID>.json`` is kept
+    as a fallback for backwards compatibility.
+
+    Returns (payload, path, token). If not found, payload/path are None.
+    """
+    token = _normalize_video_id_token(video_id)
+    if token is None:
+        return None, None, None
+
+    videos_dir = Path(meta_root) / videos_subdir
+    if not videos_dir.exists():
+        return None, None, token
+
+    candidates: List[Path] = []
+    if label is not None:
+        label_clean = str(label).strip()
+        candidates.append(videos_dir / f"{label_clean}-{token}.json")
+        raw = str(video_id).strip()
+        if raw != token:
+            candidates.append(videos_dir / f"{label_clean}-{raw}.json")
+    candidates += [
+        videos_dir / f"{token}.json",
+        videos_dir / f"{str(video_id).strip()}.json",
+    ]
+    seen: set = set()
+    unique_candidates: List[Path] = []
+    for c in candidates:
+        key = str(c)
+        if key not in seen:
+            seen.add(key)
+            unique_candidates.append(c)
+
+    for path in unique_candidates:
+        if not path.exists():
+            continue
+        with open(path, "r", encoding="utf-8") as fp:
+            payload = json.load(fp)
+        return payload, path, token
+
+    return None, None, token
+
+
+def _coerce_segment_records(segments_payload: Any) -> List[Dict[str, Any]]:
+    """Convert segment payload into a list of records with start/end/segment_id fields."""
+    if segments_payload is None:
+        return []
+
+    out: List[Dict[str, Any]] = []
+
+    # Format A: list of dicts
+    if isinstance(segments_payload, list):
+        for i, item in enumerate(segments_payload):
+            if not isinstance(item, dict):
+                continue
+            seg_id = (
+                item.get("segment_id")
+                or item.get("segment_ID")
+                or item.get("id")
+                or item.get("ID")
+                or item.get("name")
+            )
+            out.append(
+                {
+                    "segment_id": seg_id,
+                    "frame_start": item.get("frame_start"),
+                    "frame_end": item.get("frame_end"),
+                    "segment_index": i,
+                }
+            )
+        return out
+
+    # Format B: dict of arrays
+    if isinstance(segments_payload, dict):
+        starts = segments_payload.get("frame_start")
+        ends = segments_payload.get("frame_end")
+        seg_ids = (
+            segments_payload.get("segment_id")
+            or segments_payload.get("segment_ID")
+            or segments_payload.get("id")
+            or segments_payload.get("ID")
+            or segments_payload.get("segment_ids")
+        )
+
+        if not isinstance(starts, (list, tuple, np.ndarray)):
+            starts = [starts]
+        if not isinstance(ends, (list, tuple, np.ndarray)):
+            ends = [ends]
+        if not isinstance(seg_ids, (list, tuple, np.ndarray)):
+            seg_ids = [seg_ids]
+
+        n = max(len(starts), len(ends), len(seg_ids))
+        for i in range(n):
+            out.append(
+                {
+                    "segment_id": seg_ids[i] if i < len(seg_ids) else None,
+                    "frame_start": starts[i] if i < len(starts) else None,
+                    "frame_end": ends[i] if i < len(ends) else None,
+                    "segment_index": i,
+                }
+            )
+        return out
+
+    return []
+
+
+def _to_int_or_none(value: Any) -> Optional[int]:
+    if value is None:
+        return None
+    if isinstance(value, float) and np.isnan(value):
+        return None
+    if pd.isna(value):
+        return None
+    try:
+        return int(value)
+    except Exception:
+        try:
+            return int(float(str(value).strip()))
+        except Exception:
+            return None
+
+
+def build_segment_sample_records(
+    meta_root: Path,
+    mouse_name: str,
+    target_labels: Sequence[str],
+    segment_length_by_label: Dict[str, int],
+    videos_subdir: str = "global_meta/videos",
+) -> Tuple[pd.DataFrame, Dict[str, int]]:
+    """Build per-segment sample records from trial metadata + video JSON metadata.
+
+    Returned DataFrame columns:
+      mouse, label, trial_id, video_id, video_token, video_json_path,
+      segment_id, segment_index, start_frame, end_frame_exclusive,
+      seg_length, valid_frames
+    """
+    counters: Dict[str, int] = {
+        "rows_total": 0,
+        "rows_eligible": 0,
+        "rows_target_label": 0,
+        "missing_video_id": 0,
+        "missing_video_json": 0,
+        "missing_segments": 0,
+        "missing_segment_id": 0,
+        "invalid_segment_start": 0,
+        "start_out_of_bounds": 0,
+        "insufficient_frames": 0,
+        "records_built": 0,
+    }
+
+    df_trials = load_trial_metadata(meta_root, mouse_name)
+    counters["rows_total"] = int(len(df_trials))
+
+    required = {"trial", "label", "valid_frames", "video_ID", "valid_response", "valid_trial"}
+    missing = sorted([c for c in required if c not in df_trials.columns])
+    if missing:
+        raise ValueError(f"Metadata for {mouse_name} missing required columns: {missing}")
+
+    df_eligible = _eligible_trials(df_trials)
+    counters["rows_eligible"] = int(len(df_eligible))
+
+    label_set = set(target_labels)
+    df_target = df_eligible[df_eligible["label"].isin(label_set)].copy()
+    counters["rows_target_label"] = int(len(df_target))
+
+    records: List[Dict[str, Any]] = []
+    video_cache: Dict[Tuple[str, str], Tuple[Optional[Dict[str, Any]], Optional[Path], Optional[str]]] = {}
+
+    for row in df_target.itertuples(index=False):
+        label = str(getattr(row, "label"))
+        trial_id = _to_int_or_none(getattr(row, "trial"))
+        valid_frames = _to_int_or_none(getattr(row, "valid_frames"))
+        video_id = getattr(row, "video_ID")
+
+        if trial_id is None or valid_frames is None:
+            counters["invalid_segment_start"] += 1
+            continue
+        if label not in segment_length_by_label:
+            continue
+
+        video_key = _normalize_video_id_token(video_id)
+        if video_key is None:
+            counters["missing_video_id"] += 1
+            continue
+
+        cache_key = (label, video_key)
+        if cache_key not in video_cache:
+            video_cache[cache_key] = load_video_metadata_json(
+                meta_root=meta_root,
+                video_id=video_id,
+                label=label,
+                videos_subdir=videos_subdir,
+            )
+        payload, json_path, video_token = video_cache[cache_key]
+
+        if payload is None:
+            counters["missing_video_json"] += 1
+            continue
+
+        seg_payload = payload.get("segments")
+        seg_records = _coerce_segment_records(seg_payload)
+        if len(seg_records) == 0:
+            counters["missing_segments"] += 1
+            continue
+
+        seg_length = int(segment_length_by_label[label])
+
+        for seg in seg_records:
+            seg_id = seg.get("segment_id")
+            start = _to_int_or_none(seg.get("frame_start"))
+
+            if seg_id is None or str(seg_id).strip() == "":
+                counters["missing_segment_id"] += 1
+                continue
+            if start is None:
+                counters["invalid_segment_start"] += 1
+                continue
+            if start < 0 or start >= valid_frames:
+                counters["start_out_of_bounds"] += 1
+                continue
+
+            end_exclusive = int(start + seg_length)
+            if end_exclusive > valid_frames:
+                counters["insufficient_frames"] += 1
+                continue
+
+            records.append(
+                {
+                    "mouse": mouse_name,
+                    "label": label,
+                    "trial_id": int(trial_id),
+                    "video_id": str(video_id),
+                    "video_token": str(video_token) if video_token is not None else str(video_key),
+                    "video_json_path": str(json_path) if json_path is not None else "",
+                    "segment_id": str(seg_id),
+                    "segment_index": int(seg.get("segment_index", 0)),
+                    "start_frame": int(start),
+                    "end_frame_exclusive": int(end_exclusive),
+                    "seg_length": int(seg_length),
+                    "valid_frames": int(valid_frames),
+                }
+            )
+
+    counters["records_built"] = int(len(records))
+    return pd.DataFrame.from_records(records), counters

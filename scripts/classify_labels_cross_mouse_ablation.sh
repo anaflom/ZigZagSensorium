@@ -35,20 +35,20 @@
 #   - metrics summary JSON + CSV
 #
 # Usage examples:
-#   sbatch scripts/classify_trials_cross_mouse_ablation.sh
+#   sbatch scripts/classify_labels_cross_mouse_ablation.sh
 #
 #   sbatch --export=METHOD=Turnover,MICE=dynamic29156-11-10-Video-8744edeac3b4d1ce16b680916b5267ce,dynamic29228-2-10-Video-8744edeac3b4d1ce16b680916b5267ce \
-#          scripts/classify_trials_cross_mouse_ablation.sh
+#          scripts/classify_labels_cross_mouse_ablation.sh
 #
 #   sbatch --export=METHOD=Turnover,MAX_TRIALS=120,EPOCHS_MLP=20,EPOCHS_CNN1D=20,EPOCHS_CNN3D=12 \
-#          scripts/classify_trials_cross_mouse_ablation.sh
+#          scripts/classify_labels_cross_mouse_ablation.sh
 # ============================================================================
 
 set -euo pipefail
 
 # --- Configuration -----------------------------------------------------------
 PROJECT_DIR="/u/mdmc/anaflom/projects_mdmc/ZigZagSensorium"
-SCRIPT="${PROJECT_DIR}/scripts/classify_trials_cross_mouse_ablation.py"
+SCRIPT="${PROJECT_DIR}/scripts/classify_labels_cross_mouse_ablation.py"
 VENV_DIR="${PROJECT_DIR}/.venv-gpu"
 
 DATA_ROOT="${DATA_ROOT:-/orfeo/scratch/area/ygardinazzi/sensorium_2026/derivatives/grid-15x15x10_norm-by_minmax}"

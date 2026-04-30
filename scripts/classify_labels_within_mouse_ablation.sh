@@ -29,20 +29,20 @@
 #   - metrics summary JSON + CSV
 #
 # Usage examples:
-#   sbatch scripts/classify_trials_within_mouse_ablation.sh
+#   sbatch scripts/classify_labels_within_mouse_ablation.sh
 #
 #   sbatch --export=METHOD=Turnover,MICE=dynamic29156-11-10-Video-8744edeac3b4d1ce16b680916b5267ce \
-#          scripts/classify_trials_within_mouse_ablation.sh
+#          scripts/classify_labels_within_mouse_ablation.sh
 #
 #   sbatch --export=METHOD=Turnover,N_SPLITS=5,MAX_TRIALS=120,EPOCHS_MLP=20,EPOCHS_CNN1D=20,EPOCHS_CNN3D=12 \
-#          scripts/classify_trials_within_mouse_ablation.sh
+#          scripts/classify_labels_within_mouse_ablation.sh
 # ============================================================================
 
 set -euo pipefail
 
 # --- Configuration -----------------------------------------------------------
 PROJECT_DIR="/u/mdmc/anaflom/projects_mdmc/ZigZagSensorium"
-SCRIPT="${PROJECT_DIR}/scripts/classify_trials_within_mouse_ablation.py"
+SCRIPT="${PROJECT_DIR}/scripts/classify_labels_within_mouse_ablation.py"
 VENV_DIR="${PROJECT_DIR}/.venv-gpu"
 
 DATA_ROOT="${DATA_ROOT:-/orfeo/scratch/area/ygardinazzi/sensorium_2026/derivatives/grid-15x15x10_norm-by_minmax}"
@@ -50,7 +50,7 @@ META_ROOT="${META_ROOT:-/u/mdmc/anaflom/projects_mdmc/sensorium/metadata}"
 
 # Core parameters
 P_ACTIVE="${P_ACTIVE:-30}"
-PER_TRIAL_THRESH="${PER_TRIAL_THRESH:-false}"
+PER_TRIAL_THRESH="${PER_TRIAL_THRESH:-true}"
 METHOD="${METHOD:-Turnover}"
 MICE="${MICE:-None}"
 CLIP_FRAMES="${CLIP_FRAMES:-240}"

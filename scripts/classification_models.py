@@ -86,6 +86,81 @@ class GridTrialDataset(Dataset):
         return torch.tensor(out, dtype=torch.float32), int(self.y[idx])
 
 
+class SegmentGridDataset(Dataset):
+    """Lazy grid loader that slices fixed temporal segments per sample.
+
+    Each sample references a full-trial grid file and a segment window
+    [start_frame, start_frame + seg_length).
+    """
+
+    def __init__(
+        self,
+        grid_paths: Sequence,
+        y: np.ndarray,
+        valid_frames: np.ndarray,
+        start_frames: np.ndarray,
+        seg_lengths: np.ndarray,
+    ) -> None:
+        self.grid_paths = list(grid_paths)
+        self.y = np.asarray(y, dtype=np.int64)
+        self.valid_frames = np.asarray(valid_frames, dtype=np.int64)
+        self.start_frames = np.asarray(start_frames, dtype=np.int64)
+        self.seg_lengths = np.asarray(seg_lengths, dtype=np.int64)
+
+        n = int(self.y.shape[0])
+        if len(self.grid_paths) == 0:
+            raise RuntimeError("SegmentGridDataset received no paths")
+        if len(self.grid_paths) != n:
+            raise RuntimeError("Grid paths/labels length mismatch")
+        if int(self.valid_frames.shape[0]) != n:
+            raise RuntimeError("Grid paths/valid_frames length mismatch")
+        if int(self.start_frames.shape[0]) != n:
+            raise RuntimeError("Grid paths/start_frames length mismatch")
+        if int(self.seg_lengths.shape[0]) != n:
+            raise RuntimeError("Grid paths/seg_lengths length mismatch")
+
+        first_shape = np.load(self.grid_paths[0], mmap_mode="r").shape
+        if len(first_shape) != 4:
+            raise RuntimeError(
+                f"Grid file must be 4D, got {first_shape} for {self.grid_paths[0]}"
+            )
+        self.in_channels = int(first_shape[2])
+
+    def __len__(self) -> int:
+        return len(self.grid_paths)
+
+    def __getitem__(self, idx: int):
+        arr = np.load(self.grid_paths[idx])
+        if arr.ndim != 4:
+            raise RuntimeError(f"Expected 4D grid array, got shape {arr.shape} in {self.grid_paths[idx]}")
+
+        # Input file convention from compute_grid_activation.py is (Nx, Ny, Nz, T).
+        x = arr.transpose(2, 3, 0, 1).astype(np.float32, copy=False)  # (C=Nz, T, H, W)
+
+        seg_len = int(self.seg_lengths[idx])
+        start = int(self.start_frames[idx])
+        if seg_len <= 0:
+            raise RuntimeError(f"Invalid seg_len={seg_len} for sample {self.grid_paths[idx]}")
+        if start < 0:
+            raise RuntimeError(f"Invalid start={start} for sample {self.grid_paths[idx]}")
+
+        t_cap = int(min(self.valid_frames[idx], x.shape[1]))
+        if start >= t_cap:
+            raise RuntimeError(
+                f"Invalid start={start} with temporal cap={t_cap} for sample {self.grid_paths[idx]}"
+            )
+
+        t_end = int(min(start + seg_len, t_cap))
+        t_eff = int(t_end - start)
+        if t_eff <= 0:
+            raise RuntimeError(f"Invalid effective segment length={t_eff} for sample {self.grid_paths[idx]}")
+
+        out = np.zeros((x.shape[0], seg_len, x.shape[2], x.shape[3]), dtype=np.float32)
+        out[:, :t_eff, :, :] = x[:, start:t_end, :, :]
+
+        return torch.tensor(out, dtype=torch.float32), int(self.y[idx])
+
+
 class MLP(nn.Module):
     """MLP baseline for vectorized features."""
 
@@ -245,6 +320,9 @@ def train_eval_nn(
     device: torch.device,
     num_workers: int,
     seed: int,
+    progress_prefix: str = "",
+    progress_every: int = 0,
+    log_fn: Optional[Callable[[str], None]] = None,
 ) -> Tuple[Dict[str, float], np.ndarray]:
     """Train and evaluate a neural network on train/test split."""
     train_idx, val_idx = _build_train_val_indices(y_train, seed=seed)
@@ -297,7 +375,7 @@ def train_eval_nn(
     best_f1 = -1.0
     wait = 0
 
-    for _epoch in range(int(epochs)):
+    for epoch_idx in range(int(epochs)):
         _train_epoch(model, train_loader, optimizer, criterion, device)
         if val_loader is not None and val_y is not None:
             val_pred = _predict(model, val_loader, device)
@@ -310,9 +388,35 @@ def train_eval_nn(
             else:
                 wait += 1
                 if wait >= int(patience):
+                    if log_fn is not None:
+                        log_fn(
+                            f"{progress_prefix}early-stop at epoch {epoch_idx + 1}/{int(epochs)} "
+                            f"(best_val_f1={best_f1:.3f}, patience={int(patience)})"
+                        )
                     break
         else:
             best_state = copy.deepcopy(model.state_dict())
+
+        should_log = (
+            log_fn is not None
+            and int(progress_every) > 0
+            and (
+                epoch_idx == 0
+                or (epoch_idx + 1) % int(progress_every) == 0
+                or (epoch_idx + 1) == int(epochs)
+            )
+        )
+        if should_log:
+            lr_now = float(optimizer.param_groups[0]["lr"])
+            if val_loader is not None and val_y is not None:
+                log_fn(
+                    f"{progress_prefix}epoch {epoch_idx + 1}/{int(epochs)} "
+                    f"val_f1={val_f1:.3f} best_val_f1={best_f1:.3f} lr={lr_now:.3e} wait={wait}"
+                )
+            else:
+                log_fn(
+                    f"{progress_prefix}epoch {epoch_idx + 1}/{int(epochs)} lr={lr_now:.3e}"
+                )
 
     if best_state is not None:
         model.load_state_dict(best_state)

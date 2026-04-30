@@ -52,6 +52,7 @@ import numpy as np
 from shuffle_utils import (
     compute_threshold_from_grid_sample,
     compute_zigzag_from_grid,
+    derive_trial_shuffle_seed,
     shuffle_grid_phase,
     shuffle_grid_spatial_dimensions,
     shuffle_grid_time_dimension,
@@ -75,19 +76,36 @@ from utils import (
 # Cache index helpers
 # ---------------------------------------------------------------------------
 
-def _shuffle_cache_stem(base_stem: str, shuffle_type: str, shuffle_id: int) -> str:
-    """Build deterministic cache stem encoding shuffle type and ID."""
-    return f"{base_stem}_{shuffle_type}_shuffle{shuffle_id:04d}"
+def _shuffle_cache_stem(base_stem: str, shuffle_type: str) -> str:
+    """Build deterministic cache stem prefix encoding shuffle type."""
+    return f"{base_stem}_{shuffle_type}"
+
+
+def _shuffle_mode_token(different_shuffle_per_trial: bool) -> str:
+    return "different" if different_shuffle_per_trial else "same"
+
+
+def _shuffle_cache_stem_with_mode(
+    base_stem: str,
+    shuffle_type: str,
+    shuffle_id: int,
+    different_shuffle_per_trial: bool,
+) -> str:
+    mode_token = _shuffle_mode_token(different_shuffle_per_trial)
+    return f"{_shuffle_cache_stem(base_stem, shuffle_type)}_{mode_token}_shuffle{shuffle_id:04d}"
 
 
 def _existing_shuffle_ids(
     cache_dir: Path,
     base_stem: str,
     shuffle_type: str,
+    different_shuffle_per_trial: bool,
 ) -> List[int]:
     """Return sorted list of shuffle IDs that already have a valid .npz cache."""
     ids = []
-    for p in cache_dir.glob(f"{base_stem}_{shuffle_type}_shuffle*.npz"):
+    stem_prefix = _shuffle_cache_stem(base_stem, shuffle_type)
+    mode_token = _shuffle_mode_token(different_shuffle_per_trial)
+    for p in cache_dir.glob(f"{stem_prefix}_{mode_token}_shuffle*.npz"):
         stem = p.stem  # e.g. "..._time_shuffle0002"
         try:
             idx = int(stem.rsplit("shuffle", 1)[1])
@@ -101,19 +119,46 @@ def _next_shuffle_ids(
     cache_dir: Path,
     base_stem: str,
     shuffle_type: str,
+    different_shuffle_per_trial: bool,
     n_target: int,
 ) -> List[int]:
-    """Return the IDs needed to reach n_target total shuffles.
+    """Return shuffle IDs to generate to satisfy a target pool size.
 
-    If >= n_target already exist, returns an empty list (nothing to do).
-    New IDs are appended from max(existing_id) + 1.
+    Behavior:
+    - First fill missing IDs in [0, n_target-1] so the target window is dense.
+      Example: existing [0, 2], n_target=3 -> generate [1].
+    - If there are still fewer than n_target total cached IDs, append new IDs from
+      max(existing)+1.
     """
-    existing = _existing_shuffle_ids(cache_dir, base_stem, shuffle_type)
-    n_needed = n_target - len(existing)
-    if n_needed <= 0:
+    existing = _existing_shuffle_ids(
+        cache_dir,
+        base_stem,
+        shuffle_type,
+        different_shuffle_per_trial,
+    )
+    existing_set = set(existing)
+
+    if len(existing_set) >= n_target:
         return []
-    start = (max(existing) + 1) if existing else 0
-    return list(range(start, start + n_needed))
+
+    planned: List[int] = []
+
+    # Fill holes in the target range first.
+    for sid in range(n_target):
+        if sid not in existing_set:
+            planned.append(sid)
+
+    # If caches are sparse and outside the target range, we may still need extras.
+    total_after_fill = len(existing_set) + len(planned)
+    if total_after_fill < n_target:
+        next_id = (max(existing_set) + 1) if existing_set else 0
+        while total_after_fill < n_target:
+            if next_id not in existing_set:
+                planned.append(next_id)
+                total_after_fill += 1
+            next_id += 1
+
+    return planned
 
 
 # ---------------------------------------------------------------------------
@@ -124,15 +169,6 @@ MANIFEST_FILENAME = "shuffle_manifest.json"
 
 
 def _latest_manifest_path(cache_dir: Path, shuffle_type: Optional[str]) -> Optional[Path]:
-    if shuffle_type:
-        candidates = sorted(
-            cache_dir.glob(f"shuffle_manifest_{shuffle_type}_*.json"),
-            key=lambda p: p.stat().st_mtime,
-            reverse=True,
-        )
-        if candidates:
-            return candidates[0]
-
     legacy = cache_dir / MANIFEST_FILENAME
     if legacy.exists():
         return legacy
@@ -148,10 +184,11 @@ def _load_manifest(cache_dir: Path, shuffle_type: Optional[str]) -> Dict[str, An
 
 
 def _save_manifest(cache_dir: Path, manifest: Dict[str, Any], shuffle_type: str) -> Path:
-    ts = datetime.now().strftime("%Y%m%d_%H%M%S")
-    mp = cache_dir / f"shuffle_manifest_{shuffle_type}_{ts}.json"
-    with open(mp, "w", encoding="utf-8") as fp:
+    mp = cache_dir / MANIFEST_FILENAME
+    tmp_path = cache_dir / f"{MANIFEST_FILENAME}.tmp"
+    with open(tmp_path, "w", encoding="utf-8") as fp:
         json.dump(manifest, fp, indent=2)
+    tmp_path.replace(mp)
     return mp
 
 
@@ -161,9 +198,11 @@ def _manifest_key(
     p_active: int,
     per_trial_thresh: bool,
     clip_frames: int,
+    different_shuffle_per_trial: bool,
 ) -> str:
     pt = "pertrial1" if per_trial_thresh else "pertrial0"
-    return f"{shuffle_type}__{method}__{p_active}__{pt}__clip{clip_frames}"
+    mode_token = _shuffle_mode_token(different_shuffle_per_trial)
+    return f"{shuffle_type}__{method}__{p_active}__{pt}__clip{clip_frames}__shufflemode-{mode_token}"
 
 
 # ---------------------------------------------------------------------------
@@ -202,6 +241,13 @@ def _build_parser() -> argparse.ArgumentParser:
     )
     p.add_argument("--seed", type=int, default=42,
                    help="Base random seed; shuffle i uses seed + i*1000")
+    p.add_argument(
+        "--different-shuffle-per-trial",
+        type=_str2bool,
+        default=True,
+        help="If True, derive a different deterministic shuffle for each trial. "
+             "If False, reuse the same shuffle for all trials within a shuffle ID.",
+    )
 
     # Vectorization / zigzag parameters
     p.add_argument("--p-active", type=int, default=30,
@@ -301,6 +347,8 @@ def _process_single_trial(
     gpath: Path,
     shuffle_type: str,
     shuffle_seed: int,
+    trial_id: int,
+    different_shuffle_per_trial: bool,
     p_active: int,
     per_trial_thresh: bool,
     global_threshold: Optional[float],
@@ -310,7 +358,12 @@ def _process_single_trial(
     t0 = time.time()
     try:
         grid = np.load(gpath)
-        shuffled_grid = _apply_shuffle(grid, shuffle_type, seed=shuffle_seed)
+        trial_seed = (
+            derive_trial_shuffle_seed(shuffle_seed, trial_id)
+            if different_shuffle_per_trial
+            else shuffle_seed
+        )
+        shuffled_grid = _apply_shuffle(grid, shuffle_type, seed=trial_seed)
         del grid
 
         if per_trial_thresh:
@@ -343,6 +396,7 @@ def _generate_for_mouse(
     shuffle_type: str,
     shuffle_ids: List[int],
     base_seed: int,
+    different_shuffle_per_trial: bool,
     method: str,
     p_active: int,
     per_trial_thresh: bool,
@@ -434,7 +488,12 @@ def _generate_for_mouse(
         print(f"  Global threshold: {global_threshold:.6f}", flush=True)
 
     for shuffle_id in shuffle_ids:
-        shuffle_stem = _shuffle_cache_stem(base_stem, shuffle_type, shuffle_id)
+        shuffle_stem = _shuffle_cache_stem_with_mode(
+            base_stem,
+            shuffle_type,
+            shuffle_id,
+            different_shuffle_per_trial,
+        )
         cache_path = mouse_cache_dir / f"{shuffle_stem}.npz"
 
         if cache_path.exists() and not force_recompute:
@@ -443,7 +502,11 @@ def _generate_for_mouse(
             continue
 
         shuffle_seed = base_seed + shuffle_id * 1000
-        print(f"\n  [shuffle {shuffle_id}] seed={shuffle_seed}", flush=True)
+        print(
+            f"\n  [shuffle {shuffle_id}] seed={shuffle_seed} "
+            f"mode={_shuffle_mode_token(different_shuffle_per_trial)}",
+            flush=True,
+        )
 
         t_shuf = time.time()
         barcodes_shuffled: List[List[Tuple[int, float, float]]] = []
@@ -456,6 +519,8 @@ def _generate_for_mouse(
                     gpath=gpath,
                     shuffle_type=shuffle_type,
                     shuffle_seed=shuffle_seed,
+                    trial_id=int(trial_ids_common[trial_idx]),
+                    different_shuffle_per_trial=different_shuffle_per_trial,
                     p_active=p_active,
                     per_trial_thresh=per_trial_thresh,
                     global_threshold=global_threshold,
@@ -498,6 +563,8 @@ def _generate_for_mouse(
                         gpath,
                         shuffle_type,
                         shuffle_seed,
+                        int(trial_ids_common[i]),
+                        different_shuffle_per_trial,
                         p_active,
                         per_trial_thresh,
                         global_threshold,
@@ -621,6 +688,10 @@ def main() -> None:
     print(f"  max_trials          : {args.max_trials}", flush=True)
     print(f"  max_dim             : {args.max_dim}", flush=True)
     print(f"  seed                : {args.seed}", flush=True)
+    print(
+        f"  different_shuffle_per_trial : {args.different_shuffle_per_trial}",
+        flush=True,
+    )
     print(f"  force_recompute     : {args.force_recompute}", flush=True)
     print(f"  progress_every      : {args.progress_every}", flush=True)
     print(f"  num_workers         : {args.num_workers}", flush=True)
@@ -678,8 +749,19 @@ def main() -> None:
             per_trial_thresh=args.per_trial_thresh,
             clip_frames=global_clip,
         )
-        existing = _existing_shuffle_ids(mcdir, base_stem, args.shuffle_type)
-        new_ids = _next_shuffle_ids(mcdir, base_stem, args.shuffle_type, args.n_shuffles)
+        existing = _existing_shuffle_ids(
+            mcdir,
+            base_stem,
+            args.shuffle_type,
+            args.different_shuffle_per_trial,
+        )
+        new_ids = _next_shuffle_ids(
+            mcdir,
+            base_stem,
+            args.shuffle_type,
+            args.different_shuffle_per_trial,
+            args.n_shuffles,
+        )
         per_mouse_new_ids[mouse_name] = new_ids
         print(
             f"  {mouse_name}: {len(existing)}/{args.n_shuffles} existing {existing} "
@@ -702,6 +784,7 @@ def main() -> None:
             shuffle_type=args.shuffle_type,
             shuffle_ids=per_mouse_new_ids[mouse_name],
             base_seed=args.seed,
+            different_shuffle_per_trial=args.different_shuffle_per_trial,
             method=args.vectorization_method,
             p_active=args.p_active,
             per_trial_thresh=args.per_trial_thresh,
@@ -723,6 +806,7 @@ def main() -> None:
             args.p_active,
             args.per_trial_thresh,
             global_clip,
+            args.different_shuffle_per_trial,
         )
         existing_after = _existing_shuffle_ids(
             mcdir,
@@ -734,6 +818,7 @@ def main() -> None:
                 clip_frames=global_clip,
             ),
             args.shuffle_type,
+            args.different_shuffle_per_trial,
         )
         entry = manifest.get(mkey, {})
         entry.update({
@@ -744,6 +829,7 @@ def main() -> None:
             "clip_frames_used": global_clip,
             "max_trials_used": args.max_trials,
             "base_seed": args.seed,
+            "different_shuffle_per_trial": args.different_shuffle_per_trial,
             "available_ids": existing_after,
             "n_available": len(existing_after),
             "last_updated": datetime.now().isoformat(timespec="seconds"),

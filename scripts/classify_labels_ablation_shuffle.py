@@ -58,6 +58,7 @@ from classification_models import (
 from shuffle_utils import (
     compute_threshold_from_grid_sample,
     compute_zigzag_from_grid,
+    derive_trial_shuffle_seed,
     shuffle_grid_phase,
     shuffle_grid_spatial_dimensions,
     shuffle_grid_time_dimension,
@@ -675,14 +676,15 @@ def run_pipeline(state: RunState) -> Dict[str, object]:
                         )
 
                     barcodes_shuffled: List[List[Tuple[int, float, float]]] = []
-                    for gpath in grid_paths_common:
+                    for trial_id, gpath in zip(trial_ids[vec_take], grid_paths_common):
                         grid = np.load(gpath)
+                        trial_seed = derive_trial_shuffle_seed(shuffle_seed, int(trial_id))
                         if state.shuffle_type == "time":
-                            shuffled_grid = shuffle_grid_time_dimension(grid, seed=shuffle_seed)
+                            shuffled_grid = shuffle_grid_time_dimension(grid, seed=trial_seed)
                         elif state.shuffle_type == "spatial":
-                            shuffled_grid = shuffle_grid_spatial_dimensions(grid, seed=shuffle_seed)
+                            shuffled_grid = shuffle_grid_spatial_dimensions(grid, seed=trial_seed)
                         elif state.shuffle_type == "phase":
-                            shuffled_grid = shuffle_grid_phase(grid, seed=shuffle_seed)
+                            shuffled_grid = shuffle_grid_phase(grid, seed=trial_seed)
                         else:
                             raise ValueError(f"Unknown shuffle_type: {state.shuffle_type}")
                         

@@ -56,7 +56,7 @@ matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 import numpy as np
 import torch
-from sklearn.metrics import confusion_matrix
+from sklearn.metrics import ConfusionMatrixDisplay, confusion_matrix
 from sklearn.preprocessing import LabelEncoder
 from torch.utils.data import Subset
 
@@ -73,6 +73,7 @@ from utils import (
     _opt_csv_list,
     _opt_int,
     _resolve_mouse_cache_dir,
+    _short_mouse_name,
     _str2bool,
     build_vectorization_cache_stem,
     load_labelled_barcodes,
@@ -85,17 +86,34 @@ from utils import (
 # Cache index helpers (mirrors generate / within scripts)
 # ---------------------------------------------------------------------------
 
-def _shuffle_cache_stem(base_stem: str, shuffle_type: str, shuffle_id: int) -> str:
-    return f"{base_stem}_{shuffle_type}_shuffle{shuffle_id:04d}"
+def _shuffle_cache_stem(base_stem: str, shuffle_type: str) -> str:
+    return f"{base_stem}_{shuffle_type}"
+
+
+def _shuffle_mode_token(different_shuffle_per_trial: bool) -> str:
+    return "different" if different_shuffle_per_trial else "same"
+
+
+def _shuffle_cache_stem_with_mode(
+    base_stem: str,
+    shuffle_type: str,
+    shuffle_id: int,
+    different_shuffle_per_trial: bool,
+) -> str:
+    mode_token = _shuffle_mode_token(different_shuffle_per_trial)
+    return f"{_shuffle_cache_stem(base_stem, shuffle_type)}_{mode_token}_shuffle{shuffle_id:04d}"
 
 
 def _existing_shuffle_ids(
     cache_dir: Path,
     base_stem: str,
     shuffle_type: str,
+    different_shuffle_per_trial: bool,
 ) -> List[int]:
     ids = []
-    for p in cache_dir.glob(f"{base_stem}_{shuffle_type}_shuffle*.npz"):
+    stem_prefix = _shuffle_cache_stem(base_stem, shuffle_type)
+    mode_token = _shuffle_mode_token(different_shuffle_per_trial)
+    for p in cache_dir.glob(f"{stem_prefix}_{mode_token}_shuffle*.npz"):
         stem = p.stem
         try:
             idx = int(stem.rsplit("shuffle", 1)[1])
@@ -109,14 +127,6 @@ MANIFEST_FILENAME = "shuffle_manifest.json"
 
 
 def _latest_manifest_path(cache_dir: Path, shuffle_type: str) -> Optional[Path]:
-    candidates = sorted(
-        cache_dir.glob(f"shuffle_manifest_{shuffle_type}_*.json"),
-        key=lambda p: p.stat().st_mtime,
-        reverse=True,
-    )
-    if candidates:
-        return candidates[0]
-
     legacy = cache_dir / MANIFEST_FILENAME
     if legacy.exists():
         return legacy
@@ -137,9 +147,11 @@ def _manifest_key(
     p_active: int,
     per_trial_thresh: bool,
     clip_frames: int,
+    different_shuffle_per_trial: bool,
 ) -> str:
     pt = "pertrial1" if per_trial_thresh else "pertrial0"
-    return f"{shuffle_type}__{method}__{p_active}__{pt}__clip{clip_frames}"
+    mode_token = _shuffle_mode_token(different_shuffle_per_trial)
+    return f"{shuffle_type}__{method}__{p_active}__{pt}__clip{clip_frames}__shufflemode-{mode_token}"
 
 
 # ---------------------------------------------------------------------------
@@ -173,6 +185,13 @@ def _build_parser() -> argparse.ArgumentParser:
                    choices=["time", "spatial", "phase"], default="time")
     p.add_argument("--seed", type=int, default=42,
                    help="Controls reproducible random sampling of shuffle IDs")
+    p.add_argument(
+        "--different-shuffle-per-trial",
+        type=_str2bool,
+        default=True,
+        help="If True, load caches generated with different shuffles across trials. "
+             "If False, load caches generated with one shared shuffle across trials.",
+    )
 
     # Vectorization parameters (must match generation)
     p.add_argument("--p-active", type=int, default=30)
@@ -221,6 +240,15 @@ def _set_seed(seed: int) -> None:
         torch.cuda.manual_seed_all(seed)
 
 
+def _canonicalize_holdout_metrics(metrics: Dict[str, Any]) -> Dict[str, Any]:
+    normalized = dict(metrics)
+    if "accuracy" not in normalized and "mean_acc" in normalized:
+        normalized["accuracy"] = normalized["mean_acc"]
+    if "macro_f1" not in normalized and "mean_f1" in normalized:
+        normalized["macro_f1"] = normalized["mean_f1"]
+    return normalized
+
+
 # ---------------------------------------------------------------------------
 # Preflight validation — cross-mouse uses intersection of available IDs
 # ---------------------------------------------------------------------------
@@ -234,6 +262,7 @@ def _preflight_check(
     p_active: int,
     per_trial_thresh: bool,
     clip_frames: int,
+    different_shuffle_per_trial: bool,
     n_shuffles: int,
     max_trials: Optional[int],
     seed: int,
@@ -262,7 +291,12 @@ def _preflight_check(
             per_trial_thresh=per_trial_thresh,
             clip_frames=clip_frames,
         )
-        available = _existing_shuffle_ids(mcdir, base_stem, shuffle_type)
+        available = _existing_shuffle_ids(
+            mcdir,
+            base_stem,
+            shuffle_type,
+            different_shuffle_per_trial,
+        )
 
         # Check 1: Enough shuffles?
         if len(available) < n_shuffles:
@@ -276,7 +310,14 @@ def _preflight_check(
         # Check 2: Manifest max_trials consistency
         if max_trials is not None:
             manifest = _load_manifest(mcdir, shuffle_type)
-            mkey = _manifest_key(shuffle_type, method, p_active, per_trial_thresh, clip_frames)
+            mkey = _manifest_key(
+                shuffle_type,
+                method,
+                p_active,
+                per_trial_thresh,
+                clip_frames,
+                different_shuffle_per_trial,
+            )
             entry = manifest.get(mkey, {})
             stored_max = entry.get("max_trials_used", None)
             if stored_max is not None and stored_max < max_trials:
@@ -454,6 +495,7 @@ def _run_cross_mouse_one_shuffle(
 
             # LogReg
             logreg_metrics, logreg_pred = train_eval_logreg(train_x_vec, train_y, test_x_vec, test_y)
+            logreg_metrics = _canonicalize_holdout_metrics(logreg_metrics)
 
             # 3D-CNN
             train_ds = GridTrialDataset(
@@ -484,6 +526,7 @@ def _run_cross_mouse_one_shuffle(
                 device=device,
                 num_workers=num_workers_dl,
             )
+            cnn3d_metrics = _canonicalize_holdout_metrics(cnn3d_metrics)
 
             best_model = max(
                 ["logreg", "cnn3d"],
@@ -530,6 +573,145 @@ def _run_cross_mouse_one_shuffle(
             traceback.print_exc()
 
     return per_fold, cm_payload
+
+
+def _save_lomo_summary_figures_for_group(
+    *,
+    group_name: str,
+    per_fold_group: Dict[str, Dict[str, Any]],
+    confusion_group: Dict[str, Dict[str, Any]],
+    figures_dir: Path,
+    method: str,
+) -> List[Path]:
+    """Save cross-mouse LOMO figure set for one group.
+
+    group_name examples: shuffle0001, avg_across_shuffles.
+    """
+    model_order = ["logreg", "cnn3d"]
+    model_titles = {
+        "logreg": "LogReg (vector)",
+        "cnn3d": "3D-CNN (grid)",
+    }
+    colors = {
+        "logreg": "#4C72B0",
+        "cnn3d": "#DD8452",
+    }
+    offsets = {
+        "logreg": -0.5 * 0.32,
+        "cnn3d": 0.5 * 0.32,
+    }
+    width = 0.32
+
+    fold_order = sorted(per_fold_group.keys())
+    if not fold_order:
+        return []
+
+    written: List[Path] = []
+
+    # Figure 1: per-test-mouse bars
+    fig, (ax_f1, ax_acc) = plt.subplots(
+        2,
+        1,
+        figsize=(max(9, len(fold_order) * 1.3), 9.0),
+        sharex=True,
+    )
+    x = np.arange(len(fold_order))
+
+    for mk in model_order:
+        vals_f1 = [float(per_fold_group[m]["models"][mk]["macro_f1"]) for m in fold_order]
+        vals_acc = [float(per_fold_group[m]["models"][mk]["accuracy"]) for m in fold_order]
+        ax_f1.bar(x + offsets[mk], vals_f1, width, label=model_titles[mk], alpha=0.85, color=colors[mk])
+        ax_acc.bar(x + offsets[mk], vals_acc, width, label=model_titles[mk], alpha=0.85, color=colors[mk])
+
+    ax_f1.set_ylim(0, 1.05)
+    ax_f1.set_ylabel("Macro-F1")
+    ax_f1.set_title(f"Cross-mouse LOMO macro-F1 by test mouse ({method}) - {group_name}")
+    ax_f1.grid(axis="y", alpha=0.25)
+    ax_f1.legend(loc="upper right", ncol=2, fontsize=8)
+
+    ax_acc.set_xticks(x)
+    ax_acc.set_xticklabels([_short_mouse_name(m) for m in fold_order], rotation=30, ha="right", fontsize=8)
+    ax_acc.set_ylim(0, 1.05)
+    ax_acc.set_ylabel("Accuracy")
+    ax_acc.set_title(f"Cross-mouse LOMO accuracy by test mouse ({method}) - {group_name}")
+    ax_acc.grid(axis="y", alpha=0.25)
+
+    fig.tight_layout()
+    fig1 = figures_dir / f"01_lomo_macro_f1_by_test_mouse_{group_name}.png"
+    fig.savefig(fig1, dpi=300, bbox_inches="tight")
+    plt.close(fig)
+    written.append(fig1)
+
+    # Figure 2: mean across test mice
+    fig, axes = plt.subplots(1, 2, figsize=(10, 4.6))
+    mean_acc = [np.mean([per_fold_group[m]["models"][mk]["accuracy"] for m in fold_order]) for mk in model_order]
+    mean_f1 = [np.mean([per_fold_group[m]["models"][mk]["macro_f1"] for m in fold_order]) for mk in model_order]
+    std_acc = [np.std([per_fold_group[m]["models"][mk]["accuracy"] for m in fold_order]) for mk in model_order]
+    std_f1 = [np.std([per_fold_group[m]["models"][mk]["macro_f1"] for m in fold_order]) for mk in model_order]
+    xi = np.arange(len(model_order))
+
+    axes[0].bar(xi, mean_acc, yerr=std_acc, capsize=4, color=[colors[m] for m in model_order], alpha=0.85)
+    axes[0].set_xticks(xi)
+    axes[0].set_xticklabels([model_titles[m] for m in model_order], rotation=25, ha="right", fontsize=8)
+    axes[0].set_ylim(0, 1.05)
+    axes[0].set_ylabel("Accuracy")
+    axes[0].set_title(f"Mean accuracy across test mice ({group_name})")
+    axes[0].grid(axis="y", alpha=0.25)
+
+    axes[1].bar(xi, mean_f1, yerr=std_f1, capsize=4, color=[colors[m] for m in model_order], alpha=0.85)
+    axes[1].set_xticks(xi)
+    axes[1].set_xticklabels([model_titles[m] for m in model_order], rotation=25, ha="right", fontsize=8)
+    axes[1].set_ylim(0, 1.05)
+    axes[1].set_ylabel("Macro-F1")
+    axes[1].set_title(f"Mean macro-F1 across test mice ({group_name})")
+    axes[1].grid(axis="y", alpha=0.25)
+
+    fig.tight_layout()
+    fig2 = figures_dir / f"02_lomo_mean_scores_{group_name}.png"
+    fig.savefig(fig2, dpi=300, bbox_inches="tight")
+    plt.close(fig)
+    written.append(fig2)
+
+    # Figure 3: normalized confusion matrices (rows=test mice, cols=models)
+    n_mice = len(fold_order)
+    n_models = len(model_order)
+    fig, axes = plt.subplots(
+        n_mice,
+        n_models,
+        figsize=(4.4 * n_models, 3.8 * n_mice),
+        squeeze=False,
+    )
+    for row_idx, mouse_name in enumerate(fold_order):
+        payload = confusion_group[mouse_name]
+        labels_order = payload["labels"]
+        best_model = payload["best_model"]
+        for col_idx, mk in enumerate(model_order):
+            ax = axes[row_idx][col_idx]
+            cm_arr = np.asarray(payload["cms"][mk], dtype=float)
+            row_sums = cm_arr.sum(axis=1, keepdims=True)
+            cm_norm = np.divide(cm_arr, row_sums, out=np.zeros_like(cm_arr), where=row_sums != 0)
+            ConfusionMatrixDisplay(cm_norm, display_labels=labels_order).plot(
+                ax=ax,
+                cmap="Blues",
+                colorbar=False,
+                values_format=".2f",
+            )
+            title = f"{_short_mouse_name(mouse_name)}\\n{model_titles[mk]}"
+            if mk == best_model:
+                title += " ★"
+            ax.set_title(title, fontsize=7)
+
+    fig.suptitle(
+        f"Normalized confusion matrices ({group_name}) - all classifiers per test mouse (★ = best)",
+        fontsize=11,
+    )
+    fig.tight_layout()
+    fig3 = figures_dir / f"03_all_classifier_confusion_matrices_{group_name}.png"
+    fig.savefig(fig3, dpi=300, bbox_inches="tight")
+    plt.close(fig)
+    written.append(fig3)
+
+    return written
 
 
 # ---------------------------------------------------------------------------
@@ -586,6 +768,7 @@ def main() -> None:
         p_active=args.p_active,
         per_trial_thresh=args.per_trial_thresh,
         clip_frames=global_clip,
+        different_shuffle_per_trial=args.different_shuffle_per_trial,
         n_shuffles=args.n_shuffles,
         max_trials=args.max_trials,
         seed=args.seed,
@@ -593,9 +776,11 @@ def main() -> None:
     print(f"Preflight PASSED. Sampled shuffle IDs (same for all mice): {sampled_ids}", flush=True)
     # -------------------------------------------------------------------------
 
-    args.output_folder.mkdir(parents=True, exist_ok=True)
-    figures_dir = args.output_folder / "figures"
-    logs_dir = args.output_folder / "logs"
+    mode_token = _shuffle_mode_token(args.different_shuffle_per_trial)
+    output_dir = args.output_folder / mode_token
+    output_dir.mkdir(parents=True, exist_ok=True)
+    figures_dir = output_dir / "figures"
+    logs_dir = output_dir / "logs"
     figures_dir.mkdir(parents=True, exist_ok=True)
     logs_dir.mkdir(parents=True, exist_ok=True)
     log_path = logs_dir / "run.log"
@@ -612,10 +797,11 @@ def main() -> None:
         print("Cross-Mouse LOMO Classification on Shuffled Vectorizations")
         print(f"Timestamp: {datetime.now().isoformat(timespec='seconds')}")
         print("=" * 90)
-        print(f"  output_folder        : {args.output_folder}")
+        print(f"  output_folder        : {output_dir}")
         print(f"  shuffle_type         : {args.shuffle_type}")
         print(f"  n_shuffles (sampled) : {args.n_shuffles}")
         print(f"  sampled_ids          : {sampled_ids}")
+        print(f"  shuffle_mode         : {mode_token}")
         print(f"  method               : {args.vectorization_method}")
         print(f"  p_active             : {args.p_active}")
         print(f"  clip_frames          : {global_clip}")
@@ -641,7 +827,13 @@ def main() -> None:
                     clip_frames=global_clip,
                 )
                 mcdir = _resolve_mouse_cache_dir(fs, mouse_name)
-                cache_path = mcdir / f"{_shuffle_cache_stem(base_stem, args.shuffle_type, shuffle_id)}.npz"
+                shuffle_stem = _shuffle_cache_stem_with_mode(
+                    base_stem,
+                    args.shuffle_type,
+                    shuffle_id,
+                    args.different_shuffle_per_trial,
+                )
+                cache_path = mcdir / f"{shuffle_stem}.npz"
 
                 print(f"  Loading {mouse_name[-30:]} ...", end=" ", flush=True)
                 try:
@@ -682,42 +874,127 @@ def main() -> None:
             gc.collect()
 
         # ---- Save figures ---------------------------------------------------
-        print("\nSaving confusion matrix figures ...", flush=True)
-        for shuffle_id, fold_cms in all_cms.items():
-            for test_mouse, payload in fold_cms.items():
-                if payload is None:
-                    continue
-                for model_key, cm_arr in payload["cms"].items():
-                    fig, ax = plt.subplots(figsize=(6, 5))
-                    im = ax.imshow(cm_arr, interpolation="nearest", cmap="Blues")
-                    ax.set_title(f"test={test_mouse[-20:]}\nshuffle {shuffle_id} | {model_key}")
-                    ax.set_xlabel("Predicted")
-                    ax.set_ylabel("True")
-                    tick_marks = np.arange(len(payload["labels"]))
-                    ax.set_xticks(tick_marks)
-                    ax.set_xticklabels(payload["labels"], rotation=45, ha="right")
-                    ax.set_yticks(tick_marks)
-                    ax.set_yticklabels(payload["labels"])
-                    plt.colorbar(im, ax=ax)
-                    plt.tight_layout()
-                    short = test_mouse[-20:]
-                    fname = figures_dir / f"cm_cross_{short}_s{shuffle_id:04d}_{model_key}.png"
-                    fig.savefig(fname, dpi=100, bbox_inches="tight")
-                    plt.close(fig)
+        print("\nSaving LOMO summary figures (per shuffle + average across shuffles) ...", flush=True)
+        written_figures: List[Path] = []
+
+        # Per-shuffle figure sets
+        for shuffle_id in sorted(all_results.keys()):
+            per_fold_group = all_results.get(shuffle_id, {})
+            confusion_group = all_cms.get(shuffle_id, {})
+            if per_fold_group and confusion_group:
+                gname = f"shuffle{int(shuffle_id):04d}"
+                written_figures.extend(
+                    _save_lomo_summary_figures_for_group(
+                        group_name=gname,
+                        per_fold_group=per_fold_group,
+                        confusion_group=confusion_group,
+                        figures_dir=figures_dir,
+                        method=args.vectorization_method,
+                    )
+                )
+
+        # Average-across-shuffles figure set
+        avg_per_fold: Dict[str, Dict[str, Any]] = {}
+        avg_cms: Dict[str, Dict[str, Any]] = {}
+        test_mice_present = sorted({tm for fold in all_results.values() for tm in fold.keys()})
+        for test_mouse in test_mice_present:
+            available_shuffle_ids = [sid for sid, fold in all_results.items() if test_mouse in fold]
+            if not available_shuffle_ids:
+                continue
+
+            logreg_acc = [float(all_results[sid][test_mouse]["models"]["logreg"]["accuracy"]) for sid in available_shuffle_ids]
+            logreg_f1 = [float(all_results[sid][test_mouse]["models"]["logreg"]["macro_f1"]) for sid in available_shuffle_ids]
+            cnn3d_acc = [float(all_results[sid][test_mouse]["models"]["cnn3d"]["accuracy"]) for sid in available_shuffle_ids]
+            cnn3d_f1 = [float(all_results[sid][test_mouse]["models"]["cnn3d"]["macro_f1"]) for sid in available_shuffle_ids]
+
+            avg_models = {
+                "logreg": {
+                    "accuracy": float(np.mean(logreg_acc)),
+                    "macro_f1": float(np.mean(logreg_f1)),
+                    "std_accuracy": float(np.std(logreg_acc)),
+                    "std_macro_f1": float(np.std(logreg_f1)),
+                },
+                "cnn3d": {
+                    "accuracy": float(np.mean(cnn3d_acc)),
+                    "macro_f1": float(np.mean(cnn3d_f1)),
+                    "std_accuracy": float(np.std(cnn3d_acc)),
+                    "std_macro_f1": float(np.std(cnn3d_f1)),
+                },
+            }
+            best_model = max(["logreg", "cnn3d"], key=lambda m: avg_models[m]["macro_f1"])
+
+            first_row = all_results[available_shuffle_ids[0]][test_mouse]
+            avg_per_fold[test_mouse] = {
+                "shuffle_id": "avg",
+                "test_mouse": test_mouse,
+                "train_mice": first_row["train_mice"],
+                "n_train_mice": int(first_row["n_train_mice"]),
+                "n_train_trials": int(first_row["n_train_trials"]),
+                "n_test_trials": int(first_row["n_test_trials"]),
+                "n_features": int(first_row["n_features"]),
+                "clip_frames": int(first_row["clip_frames"]),
+                "shared_labels": list(first_row["shared_labels"]),
+                "n_classes": int(first_row["n_classes"]),
+                "best_model": best_model,
+                "models": {
+                    "logreg": {
+                        "accuracy": avg_models["logreg"]["accuracy"],
+                        "macro_f1": avg_models["logreg"]["macro_f1"],
+                    },
+                    "cnn3d": {
+                        "accuracy": avg_models["cnn3d"]["accuracy"],
+                        "macro_f1": avg_models["cnn3d"]["macro_f1"],
+                    },
+                },
+            }
+
+            cm_available_ids = [sid for sid, cms in all_cms.items() if test_mouse in cms]
+            if cm_available_ids:
+                labels_order = list(all_cms[cm_available_ids[0]][test_mouse]["labels"])
+                cm_logreg_stack = np.stack(
+                    [np.asarray(all_cms[sid][test_mouse]["cms"]["logreg"], dtype=float) for sid in cm_available_ids],
+                    axis=0,
+                )
+                cm_cnn3d_stack = np.stack(
+                    [np.asarray(all_cms[sid][test_mouse]["cms"]["cnn3d"], dtype=float) for sid in cm_available_ids],
+                    axis=0,
+                )
+                avg_cms[test_mouse] = {
+                    "labels": labels_order,
+                    "cms": {
+                        "logreg": np.mean(cm_logreg_stack, axis=0),
+                        "cnn3d": np.mean(cm_cnn3d_stack, axis=0),
+                    },
+                    "best_model": best_model,
+                }
+
+        if avg_per_fold and avg_cms:
+            written_figures.extend(
+                _save_lomo_summary_figures_for_group(
+                    group_name="avg_across_shuffles",
+                    per_fold_group=avg_per_fold,
+                    confusion_group=avg_cms,
+                    figures_dir=figures_dir,
+                    method=args.vectorization_method,
+                )
+            )
 
         # ---- Save JSON / CSV ------------------------------------------------
-        json_path = args.output_folder / "cross_mouse_ablation_shuffle_metrics.json"
-        csv_path = args.output_folder / "cross_mouse_ablation_shuffle_metrics.csv"
+        json_path = output_dir / "cross_mouse_ablation_shuffle_metrics.json"
+        csv_path = output_dir / "cross_mouse_ablation_shuffle_metrics.csv"
 
         payload_json = {
             "method": args.vectorization_method,
             "p_active": args.p_active,
             "shuffle_type": args.shuffle_type,
+            "different_shuffle_per_trial": args.different_shuffle_per_trial,
+            "shuffle_mode": mode_token,
             "n_shuffles_requested": args.n_shuffles,
             "seed": args.seed,
             "eligible_mice": eligible_mice,
             "sampled_shuffle_ids": sampled_ids,
             "per_shuffle": all_results,
+            "figures": [str(p) for p in written_figures],
         }
         with open(json_path, "w", encoding="utf-8") as fp:
             json.dump(payload_json, fp, indent=2)
@@ -726,6 +1003,8 @@ def main() -> None:
         with open(csv_path, "w", encoding="utf-8", newline="") as fp:
             writer = csv.writer(fp)
             writer.writerow([
+                "shuffle_mode",
+                "different_shuffle_per_trial",
                 "shuffle_id", "test_mouse", "model",
                 "n_train_trials", "n_test_trials",
                 "accuracy", "macro_f1",
@@ -736,6 +1015,8 @@ def main() -> None:
                     for mk in ["logreg", "cnn3d"]:
                         mr = row["models"][mk]
                         writer.writerow([
+                            mode_token,
+                            args.different_shuffle_per_trial,
                             shuffle_id,
                             test_mouse,
                             mk,
@@ -751,7 +1032,7 @@ def main() -> None:
         print("SUCCESS")
         print("=" * 90)
 
-    print(f"Done. Results: {args.output_folder}", flush=True)
+    print(f"Done. Results: {output_dir}", flush=True)
 
 
 if __name__ == "__main__":

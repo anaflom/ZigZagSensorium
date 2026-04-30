@@ -18,7 +18,7 @@
 # Cross-mouse LOMO classification on pre-cached shuffled zigzag vectorizations.
 #
 # Requires shuffles to have been generated first by:
-#   sbatch scripts/generate_trials_ablation_shuffle.sh
+#   sbatch scripts/generate_labels_ablation_shuffle.sh
 #
 # Preflight checks are run before any training:
 #   - Each mouse must have >= N_SHUFFLES available randomizations.
@@ -27,17 +27,17 @@
 #     IDs across all mice (same IDs used for every mouse in a round).
 #
 # Usage examples:
-#   sbatch scripts/classify_trials_cross_mouse_ablation_shuffle.sh
+#   sbatch scripts/classify_labels_cross_mouse_ablation_shuffle.sh
 #
 #   sbatch --export=N_SHUFFLES=10,SHUFFLE_TYPE=time,SEED=0 \
-#          scripts/classify_trials_cross_mouse_ablation_shuffle.sh
+#          scripts/classify_labels_cross_mouse_ablation_shuffle.sh
 # ============================================================================
 
 set -euo pipefail
 
 # --- Configuration -----------------------------------------------------------
 PROJECT_DIR="/u/mdmc/anaflom/projects_mdmc/ZigZagSensorium"
-SCRIPT="${PROJECT_DIR}/scripts/classify_trials_cross_mouse_ablation_shuffle.py"
+SCRIPT="${PROJECT_DIR}/scripts/classify_labels_cross_mouse_ablation_shuffle.py"
 VENV_DIR="${PROJECT_DIR}/.venv-gpu"
 
 DATA_ROOT="${DATA_ROOT:-/orfeo/scratch/area/ygardinazzi/sensorium_2026/derivatives/grid-15x15x10_norm-by_minmax}"
@@ -47,9 +47,10 @@ META_ROOT="${META_ROOT:-/u/mdmc/anaflom/projects_mdmc/sensorium/metadata}"
 MICE="${MICE:-None}"
 
 # Shuffle parameters
-N_SHUFFLES="${N_SHUFFLES:-3}"
+N_SHUFFLES="${N_SHUFFLES:-1}"
 SHUFFLE_TYPE="${SHUFFLE_TYPE:-time}"
 SEED="${SEED:-42}"
+DIFFERENT_SHUFFLE_PER_TRIAL="${DIFFERENT_SHUFFLE_PER_TRIAL:-true}"
 
 # Vectorization parameters (must match generation)
 P_ACTIVE="${P_ACTIVE:-30}"
@@ -79,9 +80,16 @@ else
   OUTPUT_SUFFIX="global"
 fi
 
+DIFF_PER_TRIAL_NORM="$(echo "${DIFFERENT_SHUFFLE_PER_TRIAL}" | tr '[:upper:]' '[:lower:]')"
+if [[ "${DIFF_PER_TRIAL_NORM}" == "true" ]]; then
+  SHUFFLE_MODE="different"
+else
+  SHUFFLE_MODE="same"
+fi
+
 OUTPUT_BASE="${OUTPUT_BASE:-${PROJECT_DIR}/results/ablation_shuffle/${SHUFFLE_TYPE}/p${P_ACTIVE}-${OUTPUT_SUFFIX}}"
 RUN_TS="$(date +%Y%m%d_%H%M%S)"
-RUN_TAG="cross_p${P_ACTIVE}_method-${VECTORIZATION_METHOD}_shuffle-${SHUFFLE_TYPE}_nshuf-${N_SHUFFLES}_clip-${CLIP_FRAMES}_${RUN_TS}"
+RUN_TAG="cross_p${P_ACTIVE}_method-${VECTORIZATION_METHOD}_shuffle-${SHUFFLE_TYPE}_mode-${SHUFFLE_MODE}_nshuf-${N_SHUFFLES}_clip-${CLIP_FRAMES}_${RUN_TS}"
 RUN_TAG_SAFE="$(echo "${RUN_TAG}" | sed 's/[^a-zA-Z0-9._-]/_/g')"
 OUT_DIR="${OUTPUT_BASE}/${RUN_TAG_SAFE}"
 
@@ -106,6 +114,8 @@ echo "============================================"
 echo "N_SHUFFLES    : ${N_SHUFFLES}"
 echo "SHUFFLE_TYPE  : ${SHUFFLE_TYPE}"
 echo "SEED          : ${SEED}"
+echo "SHUFFLE_MODE  : ${SHUFFLE_MODE}"
+echo "DIFF_PER_TRIAL: ${DIFFERENT_SHUFFLE_PER_TRIAL}"
 echo "============================================"
 echo "VECTORIZATION : ${VECTORIZATION_METHOD}"
 echo "P_ACTIVE      : ${P_ACTIVE}"
@@ -131,6 +141,7 @@ CMD=(
   --n-shuffles "${N_SHUFFLES}"
   --shuffle-type "${SHUFFLE_TYPE}"
   --seed "${SEED}"
+  --different-shuffle-per-trial "${DIFFERENT_SHUFFLE_PER_TRIAL}"
   --p-active "${P_ACTIVE}"
   --per-trial-thresh "${PER_TRIAL_THRESH}"
   --vectorization-method "${VECTORIZATION_METHOD}"

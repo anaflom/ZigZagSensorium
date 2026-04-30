@@ -7,9 +7,9 @@
 #SBATCH --job-name=zz-gen-shuffle
 #SBATCH --partition=GENOA
 #SBATCH --account=MDMC
-#SBATCH --cpus-per-task=8
+#SBATCH --cpus-per-task=32
 #SBATCH --mem=200G
-#SBATCH --time=48:00:00
+#SBATCH --time=24:00:00
 #SBATCH --output=logs/slurm-zz-gen-shuffle-%j.out
 #SBATCH --error=logs/slurm-zz-gen-shuffle-%j.err
 
@@ -49,9 +49,10 @@ DEFAULT_MICE="dynamic29156-11-10-Video-8744edeac3b4d1ce16b680916b5267ce,dynamic2
 MICE="${MICE:-${DEFAULT_MICE}}"
 
 # Shuffle parameters
-N_SHUFFLES="${N_SHUFFLES:-3}"
+N_SHUFFLES="${N_SHUFFLES:-1}"
 SHUFFLE_TYPE="${SHUFFLE_TYPE:-phase}"
 SEED="${SEED:-42}"
+DIFFERENT_SHUFFLE_PER_TRIAL="${DIFFERENT_SHUFFLE_PER_TRIAL:-true}"
 
 # Vectorization / zigzag parameters
 P_ACTIVE="${P_ACTIVE:-30}"
@@ -61,8 +62,8 @@ CLIP_FRAMES="${CLIP_FRAMES:-240}"
 MAX_TRIALS="${MAX_TRIALS:-None}"
 MAX_DIM="${MAX_DIM:-2}"
 GRID_SUBDIR="${GRID_SUBDIR:-trials_grid}"
-PROGRESS_EVERY="${PROGRESS_EVERY:-10}"
-NUM_WORKERS="${NUM_WORKERS:-${SLURM_CPUS_PER_TASK:-8}}"
+PROGRESS_EVERY="${PROGRESS_EVERY:-50}"
+NUM_WORKERS="${NUM_WORKERS:-${SLURM_CPUS_PER_TASK:-32}}"
 
 # Cache
 CACHE_DIR="${CACHE_DIR:-}"
@@ -88,6 +89,7 @@ echo "============================================"
 echo "N_SHUFFLES       : ${N_SHUFFLES}"
 echo "SHUFFLE_TYPE     : ${SHUFFLE_TYPE}"
 echo "SEED             : ${SEED}"
+echo "DIFF_PER_TRIAL   : ${DIFFERENT_SHUFFLE_PER_TRIAL}"
 echo "============================================"
 echo "VECTORIZATION    : ${VECTORIZATION_METHOD}"
 echo "P_ACTIVE         : ${P_ACTIVE}"
@@ -110,6 +112,7 @@ CMD=(
   --n-shuffles "${N_SHUFFLES}"
   --shuffle-type "${SHUFFLE_TYPE}"
   --seed "${SEED}"
+  --different-shuffle-per-trial "${DIFFERENT_SHUFFLE_PER_TRIAL}"
   --p-active "${P_ACTIVE}"
   --per-trial-thresh "${PER_TRIAL_THRESH}"
   --vectorization-method "${VECTORIZATION_METHOD}"

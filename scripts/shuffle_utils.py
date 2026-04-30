@@ -15,6 +15,11 @@ import numpy as np
 import pandas as pd
 
 
+def derive_trial_shuffle_seed(base_seed: int, trial_id: int) -> int:
+    """Derive a deterministic per-trial seed from a shuffle-level base seed."""
+    return int(np.random.SeedSequence([int(base_seed), int(trial_id)]).generate_state(1)[0])
+
+
 def shuffle_grid_time_dimension(grid: np.ndarray, seed: int) -> np.ndarray:
     """Shuffle a 4D grid along the time dimension (last axis).
     
@@ -28,19 +33,15 @@ def shuffle_grid_time_dimension(grid: np.ndarray, seed: int) -> np.ndarray:
     Returns
     -------
     np.ndarray
-        Shuffled grid with same shape, time frames rearranged independently
-        for each spatial location (within-trial shuffle).
+        Shuffled grid with same shape, where one time permutation is applied
+        to the full 3D grid stack for this trial.
     """
+    if grid.ndim != 4:
+        raise ValueError(f"Grid must be 4D, got shape {grid.shape}")
+
     rng = np.random.default_rng(seed)
-    shuffled = np.copy(grid)
-    
-    # Shuffle along time axis (last dimension) independently for each spatial location
-    for i in range(shuffled.shape[0]):
-        for j in range(shuffled.shape[1]):
-            for k in range(shuffled.shape[2]):
-                shuffled[i, j, k, :] = rng.permutation(shuffled[i, j, k, :])
-    
-    return shuffled
+    perm = rng.permutation(grid.shape[3])
+    return np.copy(grid[:, :, :, perm])
 
 
 def shuffle_grid_spatial_dimensions(grid: np.ndarray, seed: int) -> np.ndarray:
@@ -77,7 +78,8 @@ def shuffle_grid_phase(grid: np.ndarray, seed: int) -> np.ndarray:
     """Apply random phase shift in Fourier domain to a 4D grid (vectorized).
     
     For each voxel's time series, compute FFT, add random phase to each frequency bin
-    (same random phase for all voxels), then IFFT back to temporal domain.
+    (the phase draw is reused within this trial across all voxels), then IFFT back
+    to temporal domain.
     Uses vectorized FFT operations for performance (~3-5× faster than voxel-by-voxel).
     
     Parameters

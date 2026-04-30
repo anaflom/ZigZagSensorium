@@ -38,20 +38,20 @@
 #   - run log
 #
 # Usage examples:
-#   sbatch scripts/classify_trials_ablation_shuffle.sh
+#   sbatch scripts/classify_labels_ablation_shuffle.sh
 #
 #   sbatch --export=VECTORIZATION_METHOD=Turnover,N_SHUFFLES=10,MICE=dynamic29156-11-10-Video-8744edeac3b4d1ce16b680916b5267ce \
-#          scripts/classify_trials_ablation_shuffle.sh
+#          scripts/classify_labels_ablation_shuffle.sh
 #
 #   sbatch --export=VECTORIZATION_METHOD=BettiCurve,N_SHUFFLES=20,MAX_TRIALS=100,EPOCHS_CNN3D=15 \
-#          scripts/classify_trials_ablation_shuffle.sh
+#          scripts/classify_labels_ablation_shuffle.sh
 # ============================================================================
 
 set -euo pipefail
 
 # --- Configuration -----------------------------------------------------------
 PROJECT_DIR="/u/mdmc/anaflom/projects_mdmc/ZigZagSensorium"
-SCRIPT="${PROJECT_DIR}/scripts/classify_trials_ablation_shuffle.py"
+SCRIPT="${PROJECT_DIR}/scripts/classify_labels_ablation_shuffle.py"
 VENV_DIR="${PROJECT_DIR}/.venv-gpu"
 
 DATA_ROOT="${DATA_ROOT:-/orfeo/scratch/area/ygardinazzi/sensorium_2026/derivatives/grid-15x15x10_norm-by_minmax}"
@@ -72,7 +72,7 @@ FORCE_RECOMPUTE="${FORCE_RECOMPUTE:-false}"
 
 # Shuffle parameters
 N_SHUFFLES="${N_SHUFFLES:-3}"
-SHUFFLE_TYPE="${SHUFFLE_TYPE:-time}"
+SHUFFLE_TYPE="${SHUFFLE_TYPE:-phase}"
 MAX_DIM="${MAX_DIM:-2}"
 SKIP_WITHIN_MOUSE="${SKIP_WITHIN_MOUSE:-false}"
 SKIP_CROSS_MOUSE="${SKIP_CROSS_MOUSE:-false}"

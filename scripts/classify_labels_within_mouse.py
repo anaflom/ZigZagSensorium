@@ -56,7 +56,6 @@ class RunState:
     mice: Optional[List[str]]
     clip_frames: Optional[int]
     cache_dir: Optional[Path]
-    force_recompute: bool
     n_splits: int
     max_trials: Optional[int]
 
@@ -116,7 +115,6 @@ def run_pipeline(state: RunState) -> Dict[str, object]:
             print("  cache_dir:        <data_root>/<mouse>/cache")
         else:
             print(f"  cache_dir:        {state.cache_dir}")
-        print(f"  force_recompute:  {state.force_recompute}")
         print(f"  n_splits:         {state.n_splits}")
         print(f"  max_trials:       {state.max_trials}")
 
@@ -164,7 +162,6 @@ def run_pipeline(state: RunState) -> Dict[str, object]:
                     trial_ids=trial_ids,
                     valid_frames=valid_frames,
                     cache_dir=_resolve_mouse_cache_dir(state, mouse_name),
-                    force_recompute=state.force_recompute,
                     expected_trial_ids=vec_trial_ids,
                     message_prefix="  ",
                 )
@@ -198,6 +195,8 @@ def run_pipeline(state: RunState) -> Dict[str, object]:
                     f"acc={metrics['mean_acc']:.3f}+/-{metrics['std_acc']:.3f}, "
                     f"f1={metrics['mean_f1']:.3f}+/-{metrics['std_f1']:.3f}, folds={folds}"
                 )
+            except RuntimeError:
+                raise
             except Exception as exc:
                 print(f"  FAILED: {exc}")
                 traceback.print_exc()
@@ -376,11 +375,6 @@ def build_arg_parser() -> argparse.ArgumentParser:
         type=Path,
         help="Directory for .npz vectorization caches. Default: <data-root>/<mouse>/cache",
     )
-    parser.add_argument(
-        "--force-recompute",
-        action="store_true",
-        help="Recompute vectorizations even if cache files already exist.",
-    )
     parser.add_argument("--n-splits", default=5, type=int)
     parser.add_argument("--max-trials", default=None, type=_opt_int)
     return parser
@@ -406,7 +400,6 @@ def main() -> int:
         mice=args.mice,
         clip_frames=args.clip_frames,
         cache_dir=cache_dir,
-        force_recompute=args.force_recompute,
         n_splits=args.n_splits,
         max_trials=args.max_trials,
     )

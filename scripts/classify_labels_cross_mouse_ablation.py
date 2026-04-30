@@ -76,7 +76,6 @@ class RunState:
     clip_frames: Optional[int]
     grid_subdir: str
     cache_dir: Optional[Path]
-    force_recompute: bool
     max_trials: Optional[int]
     batch_size_vec: int
     batch_size_grid: int
@@ -138,7 +137,6 @@ def _load_mouse_data(state: RunState, mouse_name: str, global_clip: int) -> Opti
         trial_ids=trial_ids,
         valid_frames=valid_frames,
         cache_dir=_resolve_mouse_cache_dir(state, mouse_name),
-        force_recompute=state.force_recompute,
         expected_trial_ids=vec_trial_ids,
         message_prefix=f"  [{mouse_name}] ",
     )
@@ -217,7 +215,6 @@ def run_pipeline(state: RunState) -> Dict[str, object]:
         print(f"  mice:              {state.mice}")
         print(f"  clip_frames:       {state.clip_frames}")
         print(f"  grid_subdir:       {state.grid_subdir}")
-        print(f"  force_recompute:   {state.force_recompute}")
         print(f"  max_trials:        {state.max_trials}")
         print(f"  device:            {device}")
 
@@ -265,6 +262,8 @@ def run_pipeline(state: RunState) -> Dict[str, object]:
                     continue
                 mouse_data[mouse_name] = data
                 print(f"ok (trials={data['n_trials']}, source={data['vec_source']})")
+            except RuntimeError:
+                raise
             except Exception as exc:
                 print(f"FAILED: {exc}")
                 traceback.print_exc()
@@ -762,7 +761,6 @@ def build_arg_parser() -> argparse.ArgumentParser:
         type=Path,
         help="Directory for .npz vectorization caches. Default: <data-root>/<mouse>/cache",
     )
-    parser.add_argument("--force-recompute", action="store_true")
     parser.add_argument("--max-trials", default=None, type=_opt_int)
 
     parser.add_argument("--batch-size-vec", default=64, type=int)
@@ -799,7 +797,6 @@ def main() -> int:
         clip_frames=args.clip_frames,
         grid_subdir=args.grid_subdir,
         cache_dir=args.cache_dir,
-        force_recompute=args.force_recompute,
         max_trials=args.max_trials,
         batch_size_vec=args.batch_size_vec,
         batch_size_grid=args.batch_size_grid,
