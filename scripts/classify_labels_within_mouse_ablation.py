@@ -4,7 +4,7 @@
 #
 # SPDX-License-Identifier: BSD-3-Clause
 
-"""Within-mouse ablation: vectorization models vs 3D-CNN on raw grids."""
+"""Within-mouse ablation with selectable vector and grid models."""
 
 from __future__ import annotations
 
@@ -57,6 +57,47 @@ from utils import (
 )
 
 
+MODEL_CHOICES = ["logreg", "mlp", "cnn1d", "cnn3d_raw", "cnn3d_norm"]
+DEFAULT_MODELS = ["logreg", "mlp", "cnn1d", "cnn3d_raw", "cnn3d_norm"]
+MODEL_TITLES = {
+    "logreg": "LogReg (vector)",
+    "mlp": "MLP (vector)",
+    "cnn1d": "1D-CNN (vector)",
+    "cnn3d_raw": "3D-CNN (raw grid)",
+    "cnn3d_norm": "3D-CNN (normalized grid)",
+}
+MODEL_COLORS = {
+    "logreg": "#4C72B0",
+    "mlp": "#55A868",
+    "cnn1d": "#8172B2",
+    "cnn3d_raw": "#DD8452",
+    "cnn3d_norm": "#937860",
+}
+
+
+def _resolve_models(models: Optional[List[str]]) -> List[str]:
+    chosen = DEFAULT_MODELS if models is None else [m.strip() for m in models if str(m).strip()]
+    if not chosen:
+        raise ValueError("--models resolved to an empty list")
+    unknown = sorted({m for m in chosen if m not in MODEL_CHOICES})
+    if unknown:
+        raise ValueError(f"Unknown model(s) in --models: {unknown}. Allowed: {MODEL_CHOICES}")
+    deduped: List[str] = []
+    for mk in chosen:
+        if mk not in deduped:
+            deduped.append(mk)
+    return deduped
+
+
+def _grid_mode_label(model_order: Sequence[str]) -> str:
+    parts: List[str] = []
+    if "cnn3d_raw" in model_order:
+        parts.append("raw-grid")
+    if "cnn3d_norm" in model_order:
+        parts.append("trial-l1-normalized-grid")
+    return "+".join(parts) if parts else "no-grid-model"
+
+
 @dataclass
 class RunState:
     output_folder: Path
@@ -67,9 +108,9 @@ class RunState:
     zz_folder: str
     method: str
     mice: Optional[List[str]]
+    models: List[str]
     clip_frames: Optional[int]
     grid_subdir: str
-    normalize_grids: bool
     cache_dir: Optional[Path]
     n_splits: int
     max_trials: Optional[int]
@@ -123,7 +164,7 @@ def run_pipeline(state: RunState) -> Dict[str, object]:
 
     with open(log_path, "w", encoding="utf-8") as log_fp, redirect_stdout(log_fp), redirect_stderr(log_fp):
         print("=" * 90)
-        print("Within-Mouse Ablation: LogReg/MLP/1D-CNN vs 3D-CNN")
+        print("Within-Mouse Ablation: selectable vector/grid models")
         print(f"Timestamp: {datetime.now().isoformat(timespec='seconds')}")
         print("=" * 90)
 
@@ -136,14 +177,17 @@ def run_pipeline(state: RunState) -> Dict[str, object]:
         print(f"  zz_folder:         {state.zz_folder}")
         print(f"  method:            {state.method}")
         print(f"  mice:              {state.mice}")
+        print(f"  models:            {state.models}")
         print(f"  clip_frames:       {state.clip_frames}")
         print(f"  grid_subdir:       {state.grid_subdir}")
-        print(f"  normalize_grids:   {state.normalize_grids}")
         print(f"  n_splits:          {state.n_splits}")
         print(f"  max_trials:        {state.max_trials}")
         print(f"  device:            {device}")
 
-        grid_mode_label = "trial-l1-normalized-grid" if state.normalize_grids else "raw-grid"
+        model_order = list(state.models)
+        model_titles = {mk: MODEL_TITLES[mk] for mk in model_order}
+        colors = {mk: MODEL_COLORS[mk] for mk in model_order}
+        grid_mode_label = _grid_mode_label(model_order)
 
         discovered_mice = _discover_mice(state.data_root)
         selected_mice = state.mice if state.mice is not None else discovered_mice
@@ -154,14 +198,6 @@ def run_pipeline(state: RunState) -> Dict[str, object]:
 
         print(f"\nDiscovered mice: {len(discovered_mice)}")
         print(f"Selected mice: {len(selected_mice)}")
-
-        model_order = ["logreg", "mlp", "cnn1d", "cnn3d"]
-        model_titles = {
-            "logreg": "LogReg (vector)",
-            "mlp": "MLP (vector)",
-            "cnn1d": "1D-CNN (vector)",
-            "cnn3d": "3D-CNN (grid)",
-        }
 
         per_mouse: Dict[str, Dict[str, object]] = {}
         confusion_payload: Dict[str, Dict[str, object]] = {}
@@ -255,9 +291,10 @@ def run_pipeline(state: RunState) -> Dict[str, object]:
                 model_preds: Dict[str, np.ndarray] = {}
 
                 # LogReg
-                logreg_metrics, logreg_pred = run_logreg_cv(x_common, y_int, splits)
-                model_results["logreg"] = logreg_metrics
-                model_preds["logreg"] = logreg_pred
+                if "logreg" in model_order:
+                    logreg_metrics, logreg_pred = run_logreg_cv(x_common, y_int, splits)
+                    model_results["logreg"] = logreg_metrics
+                    model_preds["logreg"] = logreg_pred
 
                 # MLP
                 def build_mlp_dataset(train_idx: np.ndarray, val_idx: np.ndarray):
@@ -266,33 +303,37 @@ def run_pipeline(state: RunState) -> Dict[str, object]:
                     x_va = scaler.transform(x_common[val_idx])
                     return VectorDataset(x_tr, y_int[train_idx]), VectorDataset(x_va, y_int[val_idx])
 
-                mlp_metrics, mlp_pred = run_nn_cv(
-                    make_model=lambda: MLP(n_classes=len(class_labels), input_dim=x_common.shape[1]),
-                    train_dataset_builder=build_mlp_dataset,
-                    y_int=y_int,
-                    splits=splits,
-                    epochs=state.epochs_mlp,
-                    lr=state.lr_vec,
-                    batch_size=state.batch_size_vec,
-                    patience=state.early_stop_patience,
-                    weight_decay=state.weight_decay,
-                    device=device,
-                    num_workers=state.num_workers_dl,
-                )
-                model_results["mlp"] = mlp_metrics
-                model_preds["mlp"] = mlp_pred
+                if "mlp" in model_order:
+                    mlp_metrics, mlp_pred = run_nn_cv(
+                        make_model=lambda: MLP(n_classes=len(class_labels), input_dim=x_common.shape[1]),
+                        train_dataset_builder=build_mlp_dataset,
+                        y_int=y_int,
+                        splits=splits,
+                        epochs=state.epochs_mlp,
+                        lr=state.lr_vec,
+                        batch_size=state.batch_size_vec,
+                        patience=state.early_stop_patience,
+                        weight_decay=state.weight_decay,
+                        device=device,
+                        num_workers=state.num_workers_dl,
+                    )
+                    model_results["mlp"] = mlp_metrics
+                    model_preds["mlp"] = mlp_pred
 
                 # 1D-CNN
-                if clip_used > 0 and x_common.shape[1] % int(clip_used) == 0:
-                    cnn1d_channels = int(x_common.shape[1] // int(clip_used))
-                    cnn1d_seq_len = int(clip_used)
-                else:
-                    cnn1d_channels = 1
-                    cnn1d_seq_len = int(x_common.shape[1])
-                    print(
-                        "  Warning: feature length is not divisible by clip_frames; "
-                        "1D-CNN uses a single channel over full feature length."
-                    )
+                cnn1d_channels: Optional[int] = None
+                cnn1d_seq_len: Optional[int] = None
+                if "cnn1d" in model_order:
+                    if clip_used > 0 and x_common.shape[1] % int(clip_used) == 0:
+                        cnn1d_channels = int(x_common.shape[1] // int(clip_used))
+                        cnn1d_seq_len = int(clip_used)
+                    else:
+                        cnn1d_channels = 1
+                        cnn1d_seq_len = int(x_common.shape[1])
+                        print(
+                            "  Warning: feature length is not divisible by clip_frames; "
+                            "1D-CNN uses a single channel over full feature length."
+                        )
 
                 def build_cnn1d_dataset(train_idx: np.ndarray, val_idx: np.ndarray):
                     scaler = StandardScaler().fit(x_common[train_idx])
@@ -300,58 +341,94 @@ def run_pipeline(state: RunState) -> Dict[str, object]:
                     x_va = scaler.transform(x_common[val_idx])
                     return VectorDataset(x_tr, y_int[train_idx]), VectorDataset(x_va, y_int[val_idx])
 
-                cnn1d_metrics, cnn1d_pred = run_nn_cv(
-                    make_model=lambda: CNN1D(
-                        n_classes=len(class_labels),
-                        in_channels=cnn1d_channels,
-                        seq_len=cnn1d_seq_len,
-                    ),
-                    train_dataset_builder=build_cnn1d_dataset,
-                    y_int=y_int,
-                    splits=splits,
-                    epochs=state.epochs_cnn1d,
-                    lr=state.lr_vec,
-                    batch_size=state.batch_size_vec,
-                    patience=state.early_stop_patience,
-                    weight_decay=state.weight_decay,
-                    device=device,
-                    num_workers=state.num_workers_dl,
-                )
-                model_results["cnn1d"] = cnn1d_metrics
-                model_preds["cnn1d"] = cnn1d_pred
+                if "cnn1d" in model_order:
+                    cnn1d_metrics, cnn1d_pred = run_nn_cv(
+                        make_model=lambda: CNN1D(
+                            n_classes=len(class_labels),
+                            in_channels=int(cnn1d_channels),
+                            seq_len=int(cnn1d_seq_len),
+                        ),
+                        train_dataset_builder=build_cnn1d_dataset,
+                        y_int=y_int,
+                        splits=splits,
+                        epochs=state.epochs_cnn1d,
+                        lr=state.lr_vec,
+                        batch_size=state.batch_size_vec,
+                        patience=state.early_stop_patience,
+                        weight_decay=state.weight_decay,
+                        device=device,
+                        num_workers=state.num_workers_dl,
+                    )
+                    model_results["cnn1d"] = cnn1d_metrics
+                    model_preds["cnn1d"] = cnn1d_pred
 
-                # 3D-CNN
-                grid_dataset = GridTrialDataset(
-                    grid_paths=grid_paths_common,
-                    y=y_int,
-                    valid_frames=grid_frames_common,
-                    clip_frames=int(clip_used),
-                    normalize_by_trial=state.normalize_grids,
-                )
+                # 3D-CNN (raw/normalized as separate models)
+                if "cnn3d_raw" in model_order:
+                    grid_dataset_raw = GridTrialDataset(
+                        grid_paths=grid_paths_common,
+                        y=y_int,
+                        valid_frames=grid_frames_common,
+                        clip_frames=int(clip_used),
+                        normalize_by_trial=False,
+                    )
 
-                def build_grid_dataset(train_idx: np.ndarray, val_idx: np.ndarray):
-                    return Subset(grid_dataset, train_idx), Subset(grid_dataset, val_idx)
+                    def build_grid_dataset_raw(train_idx: np.ndarray, val_idx: np.ndarray):
+                        return Subset(grid_dataset_raw, train_idx), Subset(grid_dataset_raw, val_idx)
 
-                cnn3d_metrics, cnn3d_pred = run_nn_cv(
-                    make_model=lambda: CNN3D(
-                        n_classes=len(class_labels),
-                        in_channels=grid_dataset.in_channels,
-                    ),
-                    train_dataset_builder=build_grid_dataset,
-                    y_int=y_int,
-                    splits=splits,
-                    epochs=state.epochs_cnn3d,
-                    lr=state.lr_cnn3d,
-                    batch_size=state.batch_size_grid,
-                    patience=state.early_stop_patience,
-                    weight_decay=state.weight_decay,
-                    device=device,
-                    num_workers=state.num_workers_dl,
-                )
-                model_results["cnn3d"] = cnn3d_metrics
-                model_preds["cnn3d"] = cnn3d_pred
+                    cnn3d_raw_metrics, cnn3d_raw_pred = run_nn_cv(
+                        make_model=lambda: CNN3D(
+                            n_classes=len(class_labels),
+                            in_channels=grid_dataset_raw.in_channels,
+                        ),
+                        train_dataset_builder=build_grid_dataset_raw,
+                        y_int=y_int,
+                        splits=splits,
+                        epochs=state.epochs_cnn3d,
+                        lr=state.lr_cnn3d,
+                        batch_size=state.batch_size_grid,
+                        patience=state.early_stop_patience,
+                        weight_decay=state.weight_decay,
+                        device=device,
+                        num_workers=state.num_workers_dl,
+                    )
+                    model_results["cnn3d_raw"] = cnn3d_raw_metrics
+                    model_preds["cnn3d_raw"] = cnn3d_raw_pred
 
-                best_model = max(model_order, key=lambda m: model_results[m]["mean_f1"])
+                if "cnn3d_norm" in model_order:
+                    grid_dataset_norm = GridTrialDataset(
+                        grid_paths=grid_paths_common,
+                        y=y_int,
+                        valid_frames=grid_frames_common,
+                        clip_frames=int(clip_used),
+                        normalize_by_trial=True,
+                    )
+
+                    def build_grid_dataset_norm(train_idx: np.ndarray, val_idx: np.ndarray):
+                        return Subset(grid_dataset_norm, train_idx), Subset(grid_dataset_norm, val_idx)
+
+                    cnn3d_norm_metrics, cnn3d_norm_pred = run_nn_cv(
+                        make_model=lambda: CNN3D(
+                            n_classes=len(class_labels),
+                            in_channels=grid_dataset_norm.in_channels,
+                        ),
+                        train_dataset_builder=build_grid_dataset_norm,
+                        y_int=y_int,
+                        splits=splits,
+                        epochs=state.epochs_cnn3d,
+                        lr=state.lr_cnn3d,
+                        batch_size=state.batch_size_grid,
+                        patience=state.early_stop_patience,
+                        weight_decay=state.weight_decay,
+                        device=device,
+                        num_workers=state.num_workers_dl,
+                    )
+                    model_results["cnn3d_norm"] = cnn3d_norm_metrics
+                    model_preds["cnn3d_norm"] = cnn3d_norm_pred
+
+                if not model_results:
+                    raise RuntimeError("No models were executed. Check --models.")
+
+                best_model = max(model_results.keys(), key=lambda m: model_results[m]["mean_f1"])
 
                 per_mouse[mouse_name] = {
                     "n_trials": int(len(y_int)),
@@ -365,12 +442,12 @@ def run_pipeline(state: RunState) -> Dict[str, object]:
                     "source": vec_source,
                     "cache_path": str(cache_path),
                     "best_model": best_model,
-                    "cnn1d_channels": int(cnn1d_channels),
-                    "cnn1d_seq_len": int(cnn1d_seq_len),
+                    "cnn1d_channels": (int(cnn1d_channels) if cnn1d_channels is not None else None),
+                    "cnn1d_seq_len": (int(cnn1d_seq_len) if cnn1d_seq_len is not None else None),
                     "models": model_results,
                 }
                 model_cms: Dict[str, np.ndarray] = {}
-                for mk in model_order:
+                for mk in model_results.keys():
                     mk_cm = confusion_matrix(y_int, model_preds[mk], labels=np.arange(len(class_labels)))
                     model_cms[mk] = mk_cm
                 confusion_payload[mouse_name] = {
@@ -384,7 +461,7 @@ def run_pipeline(state: RunState) -> Dict[str, object]:
                     "y_true": [int(v) for v in y_int.tolist()],
                     "predictions": {
                         mk: [int(v) for v in np.asarray(model_preds[mk]).tolist()]
-                        for mk in model_order
+                        for mk in model_results.keys()
                     },
                     "best_model": best_model,
                 }
@@ -394,6 +471,8 @@ def run_pipeline(state: RunState) -> Dict[str, object]:
                     f"best={best_model}:{model_results[best_model]['mean_f1']:.3f}"
                 )
                 for mk in model_order:
+                    if mk not in model_results:
+                        continue
                     mr = model_results[mk]
                     print(
                         f"    {mk:6s} acc={mr['mean_acc']:.3f}+/-{mr['std_acc']:.3f} "
@@ -412,19 +491,12 @@ def run_pipeline(state: RunState) -> Dict[str, object]:
 
         # Figure 1: Macro-F1 and accuracy grouped bars by model per mouse.
         x = np.arange(len(mice_order))
-        width = 0.18
+        n_models = len(model_order)
+        width = min(0.8 / max(n_models, 1), 0.22)
         fig, (ax_f1, ax_acc) = plt.subplots(2, 1, figsize=(max(9, len(mice_order) * 1.3), 9.0), sharex=True)
         offsets = {
-            "logreg": -1.5 * width,
-            "mlp": -0.5 * width,
-            "cnn1d": 0.5 * width,
-            "cnn3d": 1.5 * width,
-        }
-        colors = {
-            "logreg": "#4C72B0",
-            "mlp": "#55A868",
-            "cnn1d": "#8172B2",
-            "cnn3d": "#DD8452",
+            mk: (idx - (n_models - 1) / 2.0) * width
+            for idx, mk in enumerate(model_order)
         }
         for mk in model_order:
             vals_f1 = [float(per_mouse[m]["models"][mk]["mean_f1"]) for m in mice_order]
@@ -444,7 +516,7 @@ def run_pipeline(state: RunState) -> Dict[str, object]:
         ax_f1.set_ylabel("Macro-F1")
         ax_f1.set_title(f"Within-mouse ablation by mouse ({state.method}, {grid_mode_label})")
         ax_f1.grid(axis="y", alpha=0.25)
-        ax_f1.legend(loc="upper right", ncol=2, fontsize=8)
+        ax_f1.legend(loc="upper right", ncol=min(3, n_models), fontsize=8)
         ax_acc.set_xticks(x)
         ax_acc.set_xticklabels([_short_mouse_name(m) for m in mice_order], rotation=30, ha="right", fontsize=8)
         ax_acc.set_ylim(0, 1.05)
@@ -489,7 +561,6 @@ def run_pipeline(state: RunState) -> Dict[str, object]:
         # Figure 3: Confusion matrices for all 4 classifiers per mouse.
         # Layout: rows = mice, columns = 4 models.
         n_mice = len(mice_order)
-        n_models = len(model_order)
         fig, axes = plt.subplots(
             n_mice,
             n_models,
@@ -568,7 +639,6 @@ def run_pipeline(state: RunState) -> Dict[str, object]:
             "per_trial_thresh": state.per_trial_thresh,
             "zz_folder": state.zz_folder,
             "grid_subdir": state.grid_subdir,
-            "normalize_grids": state.normalize_grids,
             "mice": mice_order,
             "results": per_mouse,
             "models": model_order,
@@ -593,7 +663,6 @@ def run_pipeline(state: RunState) -> Dict[str, object]:
                 [
                     "mouse",
                     "method",
-                    "normalize_grids",
                     "model",
                     "input",
                     "n_trials",
@@ -617,9 +686,8 @@ def run_pipeline(state: RunState) -> Dict[str, object]:
                         [
                             mouse_name,
                             state.method,
-                            state.normalize_grids,
                             mk,
-                            "grid" if mk == "cnn3d" else "vector",
+                            "grid" if mk.startswith("cnn3d") else "vector",
                             row["n_trials"],
                             row["n_features"],
                             row["clip_frames"],
@@ -653,7 +721,7 @@ def build_arg_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         description=(
             "Within-mouse ablation using selected zigzag vectorization (LogReg/MLP/1D-CNN) "
-            "and 3D-CNN on raw grid activity."
+            "and 3D-CNN on raw/normalized grid activity."
         )
     )
     parser.add_argument("--output-folder", required=True, type=Path)
@@ -664,9 +732,17 @@ def build_arg_parser() -> argparse.ArgumentParser:
     parser.add_argument("--method", required=True)
 
     parser.add_argument("--mice", default=None, type=_opt_csv_list)
+    parser.add_argument(
+        "--models",
+        default=None,
+        type=_opt_csv_list,
+        help=(
+            "Comma-separated models to run. Allowed: "
+            f"{','.join(MODEL_CHOICES)}. Default: {','.join(DEFAULT_MODELS)}"
+        ),
+    )
     parser.add_argument("--clip-frames", default=None, type=_opt_int)
     parser.add_argument("--grid-subdir", default="trials_grid")
-    parser.add_argument("--normalize-grids", default=False, type=_str2bool)
     parser.add_argument(
         "--cache-dir",
         default=None,
@@ -697,6 +773,7 @@ def main() -> int:
 
     output_folder = args.output_folder
     output_folder.mkdir(parents=True, exist_ok=True)
+    selected_models = _resolve_models(args.models)
 
     state = RunState(
         output_folder=output_folder,
@@ -707,9 +784,9 @@ def main() -> int:
         zz_folder=_build_zz_folder(args.p_active, args.per_trial_thresh),
         method=args.method,
         mice=args.mice,
+        models=selected_models,
         clip_frames=args.clip_frames,
         grid_subdir=args.grid_subdir,
-        normalize_grids=args.normalize_grids,
         cache_dir=args.cache_dir,
         n_splits=args.n_splits,
         max_trials=args.max_trials,

@@ -16,12 +16,13 @@
 
 # ============================================================================
 # Cross-mouse leave-one-mouse-out classification using zigzag vectorizations
-# + 3D-CNN on raw grids.
+# + 3D-CNN raw/normalized grid variants.
 #
 # Per held-out test mouse:
 #   - Train LogReg / MLP / 1D-CNN on vectorization features pooled from all
 #     other eligible mice.
-#   - Train 3D-CNN on pooled raw grids from all other eligible mice.
+#   - Train 3D-CNN on pooled raw grids (cnn3d_raw).
+#   - Train 3D-CNN on pooled normalized grids (cnn3d_norm).
 #   - Evaluate on the held-out mouse.
 #
 # Eligibility:
@@ -56,9 +57,10 @@ META_ROOT="${META_ROOT:-/u/mdmc/anaflom/projects_mdmc/sensorium/metadata}"
 
 # Core parameters
 P_ACTIVE="${P_ACTIVE:-30}"
-PER_TRIAL_THRESH="${PER_TRIAL_THRESH:-false}"
+PER_TRIAL_THRESH="${PER_TRIAL_THRESH:-true}"
 METHOD="${METHOD:-Turnover}"
 MICE="${MICE:-None}"
+MODELS="${MODELS:-logreg,mlp,cnn1d,cnn3d_raw,cnn3d_norm}"
 CLIP_FRAMES="${CLIP_FRAMES:-240}"
 GRID_SUBDIR="${GRID_SUBDIR:-trials_grid}"
 MAX_TRIALS="${MAX_TRIALS:-None}"
@@ -124,6 +126,7 @@ echo "Method: ${METHOD}"
 echo "P_ACTIVE: ${P_ACTIVE}"
 echo "PER_TRIAL_THRESH: ${PER_TRIAL_THRESH}"
 echo "MICE: ${MICE}"
+echo "MODELS: ${MODELS}"
 echo "CLIP_FRAMES: ${CLIP_FRAMES}"
 echo "GRID_SUBDIR: ${GRID_SUBDIR}"
 echo "MAX_TRIALS: ${MAX_TRIALS}"
@@ -177,6 +180,10 @@ fi
 
 if [[ "${MICE}" != "None" && "${MICE}" != "none" && "${MICE}" != "" ]]; then
   CMD+=(--mice "${MICE}")
+fi
+
+if [[ -n "${MODELS}" ]]; then
+  CMD+=(--models "${MODELS}")
 fi
 
 if [[ "${CLIP_FRAMES}" != "None" && "${CLIP_FRAMES}" != "none" && "${CLIP_FRAMES}" != "" ]]; then

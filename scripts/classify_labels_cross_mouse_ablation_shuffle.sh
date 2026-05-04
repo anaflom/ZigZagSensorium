@@ -45,10 +45,11 @@ META_ROOT="${META_ROOT:-/u/mdmc/anaflom/projects_mdmc/sensorium/metadata}"
 
 # Mouse selection
 MICE="${MICE:-None}"
+MODELS="${MODELS:-logreg,mlp,cnn1d,cnn3d_raw,cnn3d_norm}"
 
 # Shuffle parameters
 N_SHUFFLES="${N_SHUFFLES:-1}"
-SHUFFLE_TYPE="${SHUFFLE_TYPE:-time}"
+SHUFFLE_TYPE="${SHUFFLE_TYPE:-phase}"
 SEED="${SEED:-42}"
 DIFFERENT_SHUFFLE_PER_TRIAL="${DIFFERENT_SHUFFLE_PER_TRIAL:-true}"
 
@@ -123,6 +124,7 @@ echo "PER_TRIAL_THRESH : ${PER_TRIAL_THRESH}"
 echo "CLIP_FRAMES   : ${CLIP_FRAMES}"
 echo "MAX_TRIALS    : ${MAX_TRIALS}"
 echo "MICE          : ${MICE}"
+echo "MODELS        : ${MODELS}"
 echo "============================================"
 echo "BATCH_SIZE    : ${BATCH_SIZE_GRID}"
 echo "EPOCHS_CNN3D  : ${EPOCHS_CNN3D}"
@@ -163,6 +165,10 @@ fi
 
 if [[ "${MICE}" != "None" && "${MICE}" != "none" && "${MICE}" != "" ]]; then
   CMD+=(--mice "${MICE}")
+fi
+
+if [[ -n "${MODELS}" ]]; then
+  CMD+=(--models "${MODELS}")
 fi
 
 if [[ "${CLIP_FRAMES}" != "None" && "${CLIP_FRAMES}" != "none" && "${CLIP_FRAMES}" != "" ]]; then

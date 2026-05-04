@@ -15,13 +15,14 @@
 #SBATCH --error=logs/slurm-zz-within-mouse-ablation-%j.err
 
 # ============================================================================
-# Within-mouse ablation using zigzag vectorizations + 3D-CNN on raw grids.
+# Within-mouse ablation using zigzag vectorizations + 3D-CNN variants.
 #
 # Models per mouse:
 #   - LogReg on vectorization features
 #   - MLP on vectorization features
 #   - 1D-CNN on vectorization features
-#   - 3D-CNN on raw grid activity (trials_grid)
+#   - 3D-CNN on raw grid activity (cnn3d_raw)
+#   - 3D-CNN on normalized grid activity (cnn3d_norm)
 #
 # Saves:
 #   - figures (PNG)
@@ -53,6 +54,7 @@ P_ACTIVE="${P_ACTIVE:-30}"
 PER_TRIAL_THRESH="${PER_TRIAL_THRESH:-true}"
 METHOD="${METHOD:-Turnover}"
 MICE="${MICE:-None}"
+MODELS="${MODELS:-logreg,mlp,cnn1d,cnn3d_raw,cnn3d_norm}"
 CLIP_FRAMES="${CLIP_FRAMES:-240}"
 GRID_SUBDIR="${GRID_SUBDIR:-trials_grid}"
 N_SPLITS="${N_SPLITS:-5}"
@@ -120,6 +122,7 @@ echo "Method: ${METHOD}"
 echo "P_ACTIVE: ${P_ACTIVE}"
 echo "PER_TRIAL_THRESH: ${PER_TRIAL_THRESH}"
 echo "MICE: ${MICE}"
+echo "MODELS: ${MODELS}"
 echo "CLIP_FRAMES: ${CLIP_FRAMES}"
 echo "GRID_SUBDIR: ${GRID_SUBDIR}"
 echo "N_SPLITS: ${N_SPLITS}"
@@ -175,6 +178,10 @@ fi
 
 if [[ "${MICE}" != "None" && "${MICE}" != "none" && "${MICE}" != "" ]]; then
   CMD+=(--mice "${MICE}")
+fi
+
+if [[ -n "${MODELS}" ]]; then
+  CMD+=(--models "${MODELS}")
 fi
 
 if [[ "${CLIP_FRAMES}" != "None" && "${CLIP_FRAMES}" != "none" && "${CLIP_FRAMES}" != "" ]]; then
