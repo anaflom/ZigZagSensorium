@@ -20,7 +20,8 @@
 # For each eligible mouse pair with common repeated IDs:
 #   - Evaluate both directions (A->B and B->A)
 #   - Train on source mouse and test on target mouse
-#   - Models: LogReg (zigzag vectorization) and 3D-CNN (grid activations)
+#   - Models: logreg, mlp, cnn1d, cnn3d_raw, cnn3d_norm
+#     Default launcher subset: logreg,cnn3d_raw,cnn3d_norm
 #
 # Pair eligibility uses metadata with valid_trial & valid_response == True,
 # keeping IDs repeated at least MIN_ID_REPETITIONS in each mouse.
@@ -39,10 +40,11 @@ P_ACTIVE="${P_ACTIVE:-30}"
 PER_TRIAL_THRESH="${PER_TRIAL_THRESH:-true}"
 VECTORIZATION_METHOD="${VECTORIZATION_METHOD:-Turnover}"
 MICE="${MICE:-None}"
-CLIP_FRAMES="${CLIP_FRAMES:-240}"
+CLIP_FRAMES="${CLIP_FRAMES:-None}"
 MAX_TRIALS="${MAX_TRIALS:-None}"
 GRID_SUBDIR="${GRID_SUBDIR:-trials_grid}"
 CACHE_DIR="${CACHE_DIR:-}"
+MODELS="${MODELS:-logreg,cnn3d_raw,cnn3d_norm}"
 
 MIN_ID_REPETITIONS="${MIN_ID_REPETITIONS:-5}"
 SEED="${SEED:-42}"
@@ -62,7 +64,7 @@ else
   OUTPUT_SUFFIX="global"
 fi
 
-OUTPUT_BASE="${OUTPUT_BASE:-${PROJECT_DIR}/results/cross_mouse_id_decoding/p${P_ACTIVE}-${OUTPUT_SUFFIX}}"
+OUTPUT_BASE="${OUTPUT_BASE:-${PROJECT_DIR}/results/cross_mouse_video_id_decoding/p${P_ACTIVE}-${OUTPUT_SUFFIX}}"
 RUN_TS="$(date +%Y%m%d_%H%M%S)"
 RUN_TAG="p${P_ACTIVE}_method-${VECTORIZATION_METHOD}_minrep-${MIN_ID_REPETITIONS}_clip-${CLIP_FRAMES}_${RUN_TS}"
 RUN_TAG_SAFE="$(echo "${RUN_TAG}" | sed 's/[^a-zA-Z0-9._-]/_/g')"
@@ -98,6 +100,7 @@ echo "MICE          : ${MICE}"
 echo "CLIP_FRAMES   : ${CLIP_FRAMES}"
 echo "MAX_TRIALS    : ${MAX_TRIALS}"
 echo "GRID_SUBDIR   : ${GRID_SUBDIR}"
+echo "MODELS        : ${MODELS}"
 echo "============================================"
 echo "MIN_ID_REPETITIONS : ${MIN_ID_REPETITIONS}"
 echo "SEED          : ${SEED}"
@@ -118,6 +121,7 @@ CMD=(
   --p-active "${P_ACTIVE}"
   --per-trial-thresh "${PER_TRIAL_THRESH}"
   --vectorization-method "${VECTORIZATION_METHOD}"
+  --models "${MODELS}"
   --grid-subdir "${GRID_SUBDIR}"
   --min-id-repetitions "${MIN_ID_REPETITIONS}"
   --seed "${SEED}"

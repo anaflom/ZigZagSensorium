@@ -112,12 +112,16 @@ class SegmentGridDataset(Dataset):
         valid_frames: np.ndarray,
         start_frames: np.ndarray,
         seg_lengths: np.ndarray,
+        normalize_by_trial: bool = False,
+        norm_eps: float = 1e-8,
     ) -> None:
         self.grid_paths = list(grid_paths)
         self.y = np.asarray(y, dtype=np.int64)
         self.valid_frames = np.asarray(valid_frames, dtype=np.int64)
         self.start_frames = np.asarray(start_frames, dtype=np.int64)
         self.seg_lengths = np.asarray(seg_lengths, dtype=np.int64)
+        self.normalize_by_trial = bool(normalize_by_trial)
+        self.norm_eps = float(norm_eps)
 
         n = int(self.y.shape[0])
         if len(self.grid_paths) == 0:
@@ -167,8 +171,15 @@ class SegmentGridDataset(Dataset):
         if t_eff <= 0:
             raise RuntimeError(f"Invalid effective segment length={t_eff} for sample {self.grid_paths[idx]}")
 
+        x_seg = x[:, start:t_end, :, :]
+        if self.normalize_by_trial:
+            # Segment-level normalization: one scalar over all cells/channels/frames.
+            pos_mass = float(np.maximum(x_seg, 0.0).sum())
+            denom = max(pos_mass, self.norm_eps)
+            x_seg = x_seg / denom
+
         out = np.zeros((x.shape[0], seg_len, x.shape[2], x.shape[3]), dtype=np.float32)
-        out[:, :t_eff, :, :] = x[:, start:t_end, :, :]
+        out[:, :t_eff, :, :] = x_seg
 
         return torch.tensor(out, dtype=torch.float32), int(self.y[idx])
 

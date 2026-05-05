@@ -23,6 +23,10 @@
 # Segment classes:
 #   video JSON segment IDs
 #
+# Models:
+#   logreg, mlp, cnn1d, cnn3d_raw, cnn3d_norm
+#   Default launcher subset: logreg,cnn3d_raw,cnn3d_norm
+#
 # CV:
 #   Trial-level for both branches by default (Leave-One-Group-Out on trial_id).
 #
@@ -46,15 +50,16 @@ DATA_ROOT="${DATA_ROOT:-/orfeo/scratch/area/ygardinazzi/sensorium_2026/derivativ
 META_ROOT="${META_ROOT:-/u/mdmc/anaflom/projects_mdmc/sensorium/metadata}"
 
 # Mouse selection
-#DEFAULT_MICE="dynamic29156-11-10-Video-8744edeac3b4d1ce16b680916b5267ce,dynamic29228-2-10-Video-8744edeac3b4d1ce16b680916b5267ce,dynamic29234-6-9-Video-8744edeac3b4d1ce16b680916b5267ce,dynamic29513-3-5-Video-8744edeac3b4d1ce16b680916b5267ce,dynamic29514-2-9-Video-8744edeac3b4d1ce16b680916b5267ce"
-#MICE="${MICE:-${DEFAULT_MICE}}"
-MICE="${MICE:-dynamic29156-11-10-Video-8744edeac3b4d1ce16b680916b5267ce}"
+# DEFAULT_MICE="dynamic29156-11-10-Video-8744edeac3b4d1ce16b680916b5267ce,dynamic29228-2-10-Video-8744edeac3b4d1ce16b680916b5267ce,dynamic29234-6-9-Video-8744edeac3b4d1ce16b680916b5267ce,dynamic29513-3-5-Video-8744edeac3b4d1ce16b680916b5267ce,dynamic29514-2-9-Video-8744edeac3b4d1ce16b680916b5267ce"
+DEFAULT_MICE="dynamic29234-6-9-Video-8744edeac3b4d1ce16b680916b5267ce,dynamic29513-3-5-Video-8744edeac3b4d1ce16b680916b5267ce"
+MICE="${MICE:-${DEFAULT_MICE}}"
 
 P_ACTIVE="${P_ACTIVE:-30}"
 PER_TRIAL_THRESH="${PER_TRIAL_THRESH:-true}"
 CLIP_FRAMES="${CLIP_FRAMES:-None}"
 GRID_SUBDIR="${GRID_SUBDIR:-trials_grid}"
 MAX_TRIALS="${MAX_TRIALS:-None}"
+MODELS="${MODELS:-logreg,cnn3d_raw,cnn3d_norm}"
 
 CACHE_DIR="${CACHE_DIR:-}"
 
@@ -111,6 +116,7 @@ echo "Meta root: ${META_ROOT}"
 echo "Output dir: ${OUT_DIR}"
 echo "CV LogReg: ${CV_SCHEME_LOGREG} (n_splits=${CV_N_SPLITS_LOGREG})"
 echo "CV 3D-CNN: ${CV_SCHEME_CNN3D} (n_splits=${CV_N_SPLITS_CNN3D})"
+echo "MODELS: ${MODELS}"
 if [[ -n "${CACHE_DIR}" ]]; then
   echo "Cache dir override: ${CACHE_DIR}"
 else
@@ -125,6 +131,7 @@ CMD=(
   --meta-root "${META_ROOT}"
   --p-active "${P_ACTIVE}"
   --per-trial-thresh "${PER_TRIAL_THRESH}"
+  --models "${MODELS}"
   --grid-subdir "${GRID_SUBDIR}"
   --batch-size-grid "${BATCH_SIZE_GRID}"
   --epochs-cnn3d "${EPOCHS_CNN3D}"

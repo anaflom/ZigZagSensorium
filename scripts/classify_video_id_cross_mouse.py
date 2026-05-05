@@ -8,8 +8,8 @@
 
 This script builds directed mouse-pair experiments (A->B and B->A) and runs
 ID classification per label class using:
-1. Zigzag vectorization + Logistic Regression
-2. Grid activations + 3D-CNN
+1. Zigzag vectorization + LogReg / MLP / 1D-CNN
+2. Grid activations + 3D-CNN raw / 3D-CNN normalized
 
 Pair eligibility is based on metadata at:
   <meta_root>/<mouse_name>/trials/meta-trials_<mouse_name>.csv
@@ -51,7 +51,40 @@ import torch
 from sklearn.metrics import ConfusionMatrixDisplay, confusion_matrix
 from sklearn.preprocessing import LabelEncoder
 
-from classification_models import CNN3D, GridTrialDataset, train_eval_logreg, train_eval_nn
+from classification_models import (
+    CNN1D,
+    CNN3D,
+    MLP,
+    GridTrialDataset,
+    VectorDataset,
+    infer_cnn1d_shape,
+    train_eval_logreg,
+    train_eval_nn,
+)
+MODEL_CHOICES = ["logreg", "mlp", "cnn1d", "cnn3d_raw", "cnn3d_norm"]
+DEFAULT_MODELS = ["logreg", "mlp", "cnn1d", "cnn3d_raw", "cnn3d_norm"]
+MODEL_TITLES = {
+    "logreg": "LogReg (vector)",
+    "mlp": "MLP (vector)",
+    "cnn1d": "1D-CNN (vector)",
+    "cnn3d_raw": "3D-CNN (raw grid)",
+    "cnn3d_norm": "3D-CNN (normalized grid)",
+}
+
+
+def _resolve_models(models: Optional[List[str]]) -> List[str]:
+    chosen = DEFAULT_MODELS if models is None else [m.strip() for m in models if str(m).strip()]
+    if not chosen:
+        raise ValueError("--models resolved to an empty list")
+    unknown = sorted({m for m in chosen if m not in MODEL_CHOICES})
+    if unknown:
+        raise ValueError(f"Unknown model(s) in --models: {unknown}. Allowed: {MODEL_CHOICES}")
+    deduped: List[str] = []
+    for mk in chosen:
+        if mk not in deduped:
+            deduped.append(mk)
+    return deduped
+
 from utils import (
     _build_zz_folder,
     _discover_mice,
@@ -78,11 +111,16 @@ class RunState:
     zz_folder: str
     vectorization_method: str
     mice: Optional[List[str]]
+    models: List[str]
     clip_frames: Optional[int]
     grid_subdir: str
     cache_dir: Optional[Path]
     max_trials: Optional[int]
     min_id_repetitions: int
+    batch_size_vec: int
+    epochs_mlp: int
+    epochs_cnn1d: int
+    lr_vec: float
     batch_size_grid: int
     epochs_cnn3d: int
     lr_cnn3d: float
@@ -293,6 +331,7 @@ def _evaluate_direction_label(
     clip_frames: int,
     state: RunState,
     device: torch.device,
+    model_order: Sequence[str],
 ) -> Tuple[Optional[Dict[str, Any]], Optional[Dict[str, Any]], Optional[Dict[str, Any]], Optional[str]]:
     src_label_mask = source_data["labels"] == label_name
     tgt_label_mask = target_data["labels"] == label_name
@@ -346,54 +385,147 @@ def _evaluate_direction_label(
     if len(np.unique(y_train)) < 2 or len(np.unique(y_test)) < 2:
         return None, None, None, "collapsed class space after encoding"
 
-    # 1) Vectorization + LogReg
-    logreg_metrics, logreg_pred = train_eval_logreg(x_train, y_train, x_test, y_test)
-
-    # 2) Grid + 3D-CNN
     train_paths = [source_data["grid_paths"][i] for i in np.where(src_final_mask)[0]]
     test_paths = [target_data["grid_paths"][i] for i in np.where(tgt_final_mask)[0]]
     train_frames = np.asarray(source_data["grid_frames"][src_final_mask], dtype=np.int64)
     test_frames = np.asarray(target_data["grid_frames"][tgt_final_mask], dtype=np.int64)
 
-    train_grid_ds = GridTrialDataset(
-        grid_paths=train_paths,
-        y=y_train,
-        valid_frames=train_frames,
-        clip_frames=int(clip_frames),
-    )
-    test_grid_ds = GridTrialDataset(
-        grid_paths=test_paths,
-        y=y_test,
-        valid_frames=test_frames,
-        clip_frames=int(clip_frames),
-    )
+    need_grid_raw = "cnn3d_raw" in model_order
+    need_grid_norm = "cnn3d_norm" in model_order
+    train_grid_raw = None
+    test_grid_raw = None
+    train_grid_norm = None
+    test_grid_norm = None
+    if need_grid_raw:
+        train_grid_raw = GridTrialDataset(
+            grid_paths=train_paths,
+            y=y_train,
+            valid_frames=train_frames,
+            clip_frames=int(clip_frames),
+            normalize_by_trial=False,
+        )
+        test_grid_raw = GridTrialDataset(
+            grid_paths=test_paths,
+            y=y_test,
+            valid_frames=test_frames,
+            clip_frames=int(clip_frames),
+            normalize_by_trial=False,
+        )
+    if need_grid_norm:
+        train_grid_norm = GridTrialDataset(
+            grid_paths=train_paths,
+            y=y_train,
+            valid_frames=train_frames,
+            clip_frames=int(clip_frames),
+            normalize_by_trial=True,
+        )
+        test_grid_norm = GridTrialDataset(
+            grid_paths=test_paths,
+            y=y_test,
+            valid_frames=test_frames,
+            clip_frames=int(clip_frames),
+            normalize_by_trial=True,
+        )
 
+    vec_train_ds = VectorDataset(x_train, y_train)
+    vec_test_ds = VectorDataset(x_test, y_test)
+
+    metrics_by_model: Dict[str, Dict[str, float]] = {}
+    preds_by_model: Dict[str, np.ndarray] = {}
     seed_local = _stable_seed(state.seed, f"{source_mouse}->{target_mouse}:{label_name}")
-    _set_seed(seed_local)
-    cnn3d_metrics, cnn3d_pred = train_eval_nn(
-        make_model=lambda: CNN3D(
-            n_classes=len(common_ids_label),
-            in_channels=test_grid_ds.in_channels,
-        ),
-        train_ds=train_grid_ds,
-        y_train=y_train,
-        test_ds=test_grid_ds,
-        test_y=y_test,
-        epochs=state.epochs_cnn3d,
-        lr=state.lr_cnn3d,
-        batch_size=state.batch_size_grid,
-        patience=state.early_stop_patience,
-        weight_decay=state.weight_decay,
-        device=device,
-        num_workers=state.num_workers_dl,
-        seed=seed_local,
-    )
 
-    metrics_by_model = {
-        "logreg": logreg_metrics,
-        "cnn3d": cnn3d_metrics,
-    }
-    best_model = max(["logreg", "cnn3d"], key=lambda mk: metrics_by_model[mk]["macro_f1"])
+    for mk in model_order:
+        _set_seed(seed_local)
+        if mk == "logreg":
+            mm, pred = train_eval_logreg(x_train, y_train, x_test, y_test)
+        elif mk == "mlp":
+            mm, pred = train_eval_nn(
+                make_model=lambda n_classes=len(common_ids_label), d=int(x_train.shape[1]): MLP(
+                    n_classes=n_classes,
+                    input_dim=d,
+                ),
+                train_ds=vec_train_ds,
+                y_train=y_train,
+                test_ds=vec_test_ds,
+                test_y=y_test,
+                epochs=state.epochs_mlp,
+                lr=state.lr_vec,
+                batch_size=state.batch_size_vec,
+                patience=state.early_stop_patience,
+                weight_decay=state.weight_decay,
+                device=device,
+                num_workers=state.num_workers_dl,
+                seed=seed_local,
+            )
+        elif mk == "cnn1d":
+            in_channels, seq_len = infer_cnn1d_shape(int(x_train.shape[1]), int(clip_frames))
+            mm, pred = train_eval_nn(
+                make_model=lambda n_classes=len(common_ids_label), ic=in_channels, sl=seq_len: CNN1D(
+                    n_classes=n_classes,
+                    in_channels=ic,
+                    seq_len=sl,
+                ),
+                train_ds=vec_train_ds,
+                y_train=y_train,
+                test_ds=vec_test_ds,
+                test_y=y_test,
+                epochs=state.epochs_cnn1d,
+                lr=state.lr_vec,
+                batch_size=state.batch_size_vec,
+                patience=state.early_stop_patience,
+                weight_decay=state.weight_decay,
+                device=device,
+                num_workers=state.num_workers_dl,
+                seed=seed_local,
+            )
+        elif mk == "cnn3d_raw":
+            if train_grid_raw is None or test_grid_raw is None:
+                raise RuntimeError("cnn3d_raw selected but raw grid datasets were not prepared")
+            mm, pred = train_eval_nn(
+                make_model=lambda n_classes=len(common_ids_label), in_ch=int(test_grid_raw.in_channels): CNN3D(
+                    n_classes=n_classes,
+                    in_channels=in_ch,
+                ),
+                train_ds=train_grid_raw,
+                y_train=y_train,
+                test_ds=test_grid_raw,
+                test_y=y_test,
+                epochs=state.epochs_cnn3d,
+                lr=state.lr_cnn3d,
+                batch_size=state.batch_size_grid,
+                patience=state.early_stop_patience,
+                weight_decay=state.weight_decay,
+                device=device,
+                num_workers=state.num_workers_dl,
+                seed=seed_local,
+            )
+        elif mk == "cnn3d_norm":
+            if train_grid_norm is None or test_grid_norm is None:
+                raise RuntimeError("cnn3d_norm selected but normalized grid datasets were not prepared")
+            mm, pred = train_eval_nn(
+                make_model=lambda n_classes=len(common_ids_label), in_ch=int(test_grid_norm.in_channels): CNN3D(
+                    n_classes=n_classes,
+                    in_channels=in_ch,
+                ),
+                train_ds=train_grid_norm,
+                y_train=y_train,
+                test_ds=test_grid_norm,
+                test_y=y_test,
+                epochs=state.epochs_cnn3d,
+                lr=state.lr_cnn3d,
+                batch_size=state.batch_size_grid,
+                patience=state.early_stop_patience,
+                weight_decay=state.weight_decay,
+                device=device,
+                num_workers=state.num_workers_dl,
+                seed=seed_local,
+            )
+        else:
+            raise ValueError(f"Unsupported model key: {mk}")
+        metrics_by_model[mk] = mm
+        preds_by_model[mk] = pred
+
+    best_model = max(model_order, key=lambda mk: metrics_by_model[mk]["macro_f1"])
 
     result_row = {
         "source_mouse": source_mouse,
@@ -419,8 +551,8 @@ def _evaluate_direction_label(
     }
 
     cms = {
-        "logreg": confusion_matrix(y_test, logreg_pred, labels=np.arange(len(common_ids_label))),
-        "cnn3d": confusion_matrix(y_test, cnn3d_pred, labels=np.arange(len(common_ids_label))),
+        mk: confusion_matrix(y_test, preds_by_model[mk], labels=np.arange(len(common_ids_label)))
+        for mk in model_order
     }
     cm_payload = {
         "labels": [str(v) for v in common_ids_label],
@@ -432,8 +564,7 @@ def _evaluate_direction_label(
         "labels": [str(v) for v in common_ids_label],
         "y_true": [int(v) for v in y_test.tolist()],
         "predictions": {
-            "logreg": [int(v) for v in np.asarray(logreg_pred).tolist()],
-            "cnn3d": [int(v) for v in np.asarray(cnn3d_pred).tolist()],
+            mk: [int(v) for v in np.asarray(preds_by_model[mk]).tolist()] for mk in model_order
         },
         "best_model": best_model,
         "source_mouse": source_mouse,
@@ -444,7 +575,7 @@ def _evaluate_direction_label(
     return result_row, cm_payload, pred_payload, None
 
 
-def _compute_per_label_summary(records: Sequence[Dict[str, Any]]) -> Dict[str, Any]:
+def _compute_per_label_summary(records: Sequence[Dict[str, Any]], model_order: Sequence[str]) -> Dict[str, Any]:
     """Compute compact per-label summary aggregating across directions and models.
     
     Returns dict with per-label keys containing:
@@ -466,7 +597,7 @@ def _compute_per_label_summary(records: Sequence[Dict[str, Any]]) -> Dict[str, A
         
         # Aggregate by model
         stats_by_model: Dict[str, Dict[str, Any]] = {}
-        for model_name in ["logreg", "cnn3d"]:
+        for model_name in model_order:
             model_records = [r for r in label_records if str(r["model"]) == model_name]
             if not model_records:
                 continue
@@ -508,6 +639,7 @@ def _compute_per_label_summary(records: Sequence[Dict[str, Any]]) -> Dict[str, A
 def _plot_metric_heatmaps(
     *,
     records: Sequence[Dict[str, Any]],
+    model_order: Sequence[str],
     value_key: str,
     figures_dir: Path,
     filename: str,
@@ -518,9 +650,16 @@ def _plot_metric_heatmaps(
 
     direction_order = sorted({str(r["pair_direction"]) for r in records})
     label_order = sorted({str(r["label"]) for r in records})
-    models = ["logreg", "cnn3d"]
+    models = list(model_order)
+    if len(models) == 0:
+        return None
 
-    fig, axes = plt.subplots(1, 2, figsize=(max(11, len(label_order) * 1.2), max(6, len(direction_order) * 0.45)), squeeze=False)
+    fig, axes = plt.subplots(
+        1,
+        len(models),
+        figsize=(max(6 + len(models) * 2.5, len(label_order) * 1.2 * len(models)), max(6, len(direction_order) * 0.45)),
+        squeeze=False,
+    )
 
     for col_idx, model_name in enumerate(models):
         ax = axes[0][col_idx]
@@ -561,16 +700,25 @@ def _plot_metric_heatmaps(
 def _plot_label_aggregate_bars(
     *,
     records: Sequence[Dict[str, Any]],
+    model_order: Sequence[str],
     figures_dir: Path,
 ) -> Optional[Path]:
     if not records:
         return None
 
     labels = sorted({str(r["label"]) for r in records})
-    models = ["logreg", "cnn3d"]
-    colors = {"logreg": "#4C72B0", "cnn3d": "#DD8452"}
+    models = list(model_order)
+    if len(models) == 0:
+        return None
+    colors = {
+        "logreg": "#4C72B0",
+        "mlp": "#55A868",
+        "cnn1d": "#8172B2",
+        "cnn3d_raw": "#DD8452",
+        "cnn3d_norm": "#937860",
+    }
 
-    width = 0.35
+    width = min(0.82 / len(models), 0.22)
     x = np.arange(len(labels))
 
     fig, axes = plt.subplots(1, 2, figsize=(max(10, len(labels) * 1.1), 4.8))
@@ -589,7 +737,7 @@ def _plot_label_aggregate_bars(
                 err_by_label.append(float(np.std(vals)) if vals else 0.0)
 
             axis.bar(
-                x + (idx - 0.5) * width,
+                x + (idx - (len(models) - 1) / 2.0) * width,
                 vals_by_label,
                 width,
                 yerr=err_by_label,
@@ -619,15 +767,15 @@ def _plot_confusion_per_direction_label(
     direction_key: str,
     label_name: str,
     payload: Dict[str, Any],
+    model_order: Sequence[str],
     figures_dir: Path,
 ) -> Path:
-    model_order = ["logreg", "cnn3d"]
-    model_titles = {"logreg": "LogReg (vector)", "cnn3d": "3D-CNN (grid)"}
+    model_titles = MODEL_TITLES
 
     labels_order = payload["labels"]
     src, tgt = direction_key.split("__to__", 1)
 
-    fig, axes = plt.subplots(1, 2, figsize=(9.0, 3.8), squeeze=False)
+    fig, axes = plt.subplots(1, len(model_order), figsize=(max(4.0 * len(model_order), 9.0), 3.8), squeeze=False)
     for col_idx, mk in enumerate(model_order):
         ax = axes[0][col_idx]
         cm_arr = np.asarray(payload["cms"][mk], dtype=float)
@@ -673,7 +821,7 @@ def run_pipeline(state: RunState) -> Dict[str, Any]:
 
     with open(log_path, "w", encoding="utf-8") as log_fp, redirect_stdout(log_fp), redirect_stderr(log_fp):
         print("=" * 90)
-        print("Cross-Mouse Video ID Decoding: LogReg (vector) + 3D-CNN (grid)")
+        print("Cross-Mouse Video ID Decoding: selectable vector/grid models")
         print(f"Timestamp: {datetime.now().isoformat(timespec='seconds')}")
         print("=" * 90)
 
@@ -685,6 +833,7 @@ def run_pipeline(state: RunState) -> Dict[str, Any]:
         print(f"  per_trial_thresh:    {state.per_trial_thresh}")
         print(f"  zz_folder:           {state.zz_folder}")
         print(f"  vectorization_method:{state.vectorization_method}")
+        print(f"  models:              {state.models}")
         print(f"  mice:                {state.mice}")
         print(f"  clip_frames:         {state.clip_frames}")
         print(f"  max_trials:          {state.max_trials}")
@@ -700,6 +849,8 @@ def run_pipeline(state: RunState) -> Dict[str, Any]:
 
         print(f"\nDiscovered mice: {len(discovered_mice)}")
         print(f"Selected mice: {len(selected_mice)}")
+
+        model_order = list(state.models)
 
         # Determine global clip
         if state.clip_frames is not None:
@@ -805,6 +956,7 @@ def run_pipeline(state: RunState) -> Dict[str, Any]:
                         clip_frames=global_clip,
                         state=state,
                         device=device,
+                        model_order=model_order,
                     )
 
                     if result_row is None or cm_row is None or pred_row is None:
@@ -829,7 +981,7 @@ def run_pipeline(state: RunState) -> Dict[str, Any]:
                         f"best={best}:{best_f1:.3f}"
                     )
 
-                    for model_name in ["logreg", "cnn3d"]:
+                    for model_name in model_order:
                         mm = result_row["models"][model_name]
                         csv_records.append(
                             {
@@ -838,7 +990,7 @@ def run_pipeline(state: RunState) -> Dict[str, Any]:
                                 "pair_direction": direction_key,
                                 "label": label_name,
                                 "model": model_name,
-                                "input": "vector" if model_name == "logreg" else "grid",
+                                "input": "grid" if model_name.startswith("cnn3d") else "vector",
                                 "n_train_trials": result_row["n_train_trials"],
                                 "n_test_trials": result_row["n_test_trials"],
                                 "n_features": result_row["n_features"],
@@ -870,13 +1022,14 @@ def run_pipeline(state: RunState) -> Dict[str, Any]:
 
         # Compute per-label summary for downstream figure regeneration
         print("\nComputing per-label summary ...")
-        per_label_summary = _compute_per_label_summary(csv_records)
+        per_label_summary = _compute_per_label_summary(csv_records, model_order=model_order)
 
         # Figures
         print("\nSaving figures ...")
         fig_paths: List[Path] = []
         fig_acc = _plot_metric_heatmaps(
             records=csv_records,
+            model_order=model_order,
             value_key="accuracy",
             figures_dir=figures_dir,
             filename="01_accuracy_by_pair_label.png",
@@ -888,6 +1041,7 @@ def run_pipeline(state: RunState) -> Dict[str, Any]:
 
         fig_f1 = _plot_metric_heatmaps(
             records=csv_records,
+            model_order=model_order,
             value_key="macro_f1",
             figures_dir=figures_dir,
             filename="02_macro_f1_by_pair_label.png",
@@ -897,7 +1051,7 @@ def run_pipeline(state: RunState) -> Dict[str, Any]:
             fig_paths.append(fig_f1)
             print(f"  Saved: {fig_f1}")
 
-        fig_mean = _plot_label_aggregate_bars(records=csv_records, figures_dir=figures_dir)
+        fig_mean = _plot_label_aggregate_bars(records=csv_records, model_order=model_order, figures_dir=figures_dir)
         if fig_mean is not None:
             fig_paths.append(fig_mean)
             print(f"  Saved: {fig_mean}")
@@ -908,6 +1062,7 @@ def run_pipeline(state: RunState) -> Dict[str, Any]:
                     direction_key=direction_key,
                     label_name=label_name,
                     payload=payload,
+                    model_order=model_order,
                     figures_dir=figures_dir,
                 )
                 fig_paths.append(out)
@@ -924,7 +1079,7 @@ def run_pipeline(state: RunState) -> Dict[str, Any]:
             for label_name, payload in labels_map.items():
                 cms_counts: Dict[str, List[List[int]]] = {}
                 cms_norm: Dict[str, List[List[float]]] = {}
-                for mk in ["logreg", "cnn3d"]:
+                for mk in model_order:
                     cm = np.asarray(payload["cms"][mk], dtype=np.int64)
                     row_sums = cm.sum(axis=1, keepdims=True)
                     cm_norm = np.divide(cm, row_sums, out=np.zeros_like(cm, dtype=float), where=row_sums != 0)
@@ -993,8 +1148,8 @@ def run_pipeline(state: RunState) -> Dict[str, Any]:
             "id_set_by_mouse": {k: sorted(list(v)) for k, v in id_set_by_mouse.items()},
             "results": per_direction,
             "per_label_summary": per_label_summary,
-            "n_direction_label_units": int(len(csv_records) // 2),
-            "models": ["logreg", "cnn3d"],
+            "n_direction_label_units": int(len(csv_records) // max(1, len(model_order))),
+            "models": model_order,
             "figures": [str(p) for p in fig_paths],
             "confusion_matrices_path": str(confusion_json_path),
             "prediction_outputs_path": str(predictions_json_path),
@@ -1024,7 +1179,7 @@ def build_arg_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         description=(
             "Cross-mouse video ID decoding by label: train on one mouse, test on another, "
-            "using LogReg on zigzag vectors and 3D-CNN on grid activations."
+            "using selectable vector/grid models."
         )
     )
     parser.add_argument("--output-folder", required=True, type=Path)
@@ -1036,6 +1191,16 @@ def build_arg_parser() -> argparse.ArgumentParser:
     parser.add_argument("--vectorization-method", required=True, type=str)
 
     parser.add_argument("--mice", default=None, type=_opt_csv_list)
+    parser.add_argument(
+        "--models",
+        default=None,
+        type=_opt_csv_list,
+        help=(
+            "Comma-separated models to run: "
+            "logreg,mlp,cnn1d,cnn3d_raw,cnn3d_norm. "
+            "Default: all models."
+        ),
+    )
     parser.add_argument("--clip-frames", default=None, type=_opt_int)
     parser.add_argument("--grid-subdir", default="trials_grid")
     parser.add_argument(
@@ -1048,7 +1213,11 @@ def build_arg_parser() -> argparse.ArgumentParser:
 
     parser.add_argument("--min-id-repetitions", default=5, type=int)
 
+    parser.add_argument("--batch-size-vec", default=64, type=int)
     parser.add_argument("--batch-size-grid", default=16, type=int)
+    parser.add_argument("--epochs-mlp", default=60, type=int)
+    parser.add_argument("--epochs-cnn1d", default=60, type=int)
+    parser.add_argument("--lr-vec", default=1e-3, type=float)
     parser.add_argument("--epochs-cnn3d", default=40, type=int)
     parser.add_argument("--lr-cnn3d", default=5e-4, type=float)
     parser.add_argument("--weight-decay", default=1e-4, type=float)
@@ -1067,6 +1236,11 @@ def main() -> int:
     if int(args.min_id_repetitions) < 1:
         print("ERROR: --min-id-repetitions must be >= 1", file=sys.stderr)
         return 2
+    try:
+        model_order = _resolve_models(args.models)
+    except ValueError as exc:
+        print(f"ERROR: {exc}", file=sys.stderr)
+        return 2
 
     output_folder = args.output_folder
     output_folder.mkdir(parents=True, exist_ok=True)
@@ -1080,11 +1254,16 @@ def main() -> int:
         zz_folder=_build_zz_folder(args.p_active, args.per_trial_thresh),
         vectorization_method=args.vectorization_method,
         mice=args.mice,
+        models=model_order,
         clip_frames=args.clip_frames,
         grid_subdir=args.grid_subdir,
         cache_dir=args.cache_dir,
         max_trials=args.max_trials,
         min_id_repetitions=args.min_id_repetitions,
+        batch_size_vec=args.batch_size_vec,
+        epochs_mlp=args.epochs_mlp,
+        epochs_cnn1d=args.epochs_cnn1d,
+        lr_vec=args.lr_vec,
         batch_size_grid=args.batch_size_grid,
         epochs_cnn3d=args.epochs_cnn3d,
         lr_cnn3d=args.lr_cnn3d,
