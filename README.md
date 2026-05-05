@@ -1,3 +1,9 @@
+<!--
+SPDX-FileCopyrightText: 2026 Ana Flo <anaflom@gmail.com>
+
+SPDX-License-Identifier: BSD-3-Clause
+-->
+
 # ZigZag Persistence for the Sensorium Dataset
 
 This repository applies cubical zigzag persistence to neural responses from the Sensorium dataset. 
