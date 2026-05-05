@@ -58,3 +58,6 @@ MANIFEST
 
 # ZZ-top 
 zz-top/
+
+# Grids Fortran script
+scripts/assign_grid.f90

@@ -25,6 +25,7 @@ https://github.com/anaflom/sensorium/tree/main
 - `scipy >= 1.9`
 - `jupyter >= 1.0`
 - **`zz-top`** — private package providing zigzag persistence and vectorization utilities; access must be granted separately
+- **`assign_grid.f90`** — private code necessary for estimating grid activation; access must be granted separately
 
 Install:
 
