@@ -21,6 +21,7 @@ matplotlib>=3.7
 scipy>=1.9
 jupyter>=1.0
 scikit-image>=0.26
+statsmodels>=0.15
 
 # Required by scripts/detect_scene_cuts.py (scene-cut detection in NaturalVideo clips)
 scenedetect>=0.7.2
