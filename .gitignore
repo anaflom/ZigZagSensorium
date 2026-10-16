@@ -18,6 +18,8 @@ notebooks/figures/
 notebooks/test*.ipynb
 notebooks/.ipynb_checkpoints/
 notebooks/cache/
+notebooks/*_run.ipynb
+notebooks/*_results.ipynb
 
 # Results
 results/
@@ -58,6 +60,7 @@ MANIFEST
 
 # ZZ-top 
 zz-top/
+zz-top_old_backup/
 
 # Grids Fortran script
 scripts/assign_grid.f90
