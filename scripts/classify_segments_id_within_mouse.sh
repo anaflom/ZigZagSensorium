@@ -42,12 +42,12 @@
 
 set -euo pipefail
 
-PROJECT_DIR="/u/mdmc/anaflom/projects_mdmc/ZigZagSensorium"
+PROJECT_DIR="/u/area/anaflom/projects_mdmc/ZigZagSensorium"
 SCRIPT="${PROJECT_DIR}/scripts/classify_segments_id_within_mouse.py"
 VENV_DIR="${VENV_DIR:-${PROJECT_DIR}/.venv-gpu}"
 
 DATA_ROOT="${DATA_ROOT:-/orfeo/scratch/area/ygardinazzi/sensorium_2026/derivatives/grid-15x15x10_norm-by_minmax}"
-META_ROOT="${META_ROOT:-/u/mdmc/anaflom/projects_mdmc/sensorium/metadata}"
+META_ROOT="${META_ROOT:-/u/area/anaflom/projects_mdmc/sensorium/metadata}"
 
 # Mouse selection
 # DEFAULT_MICE="dynamic29156-11-10-Video-8744edeac3b4d1ce16b680916b5267ce,dynamic29228-2-10-Video-8744edeac3b4d1ce16b680916b5267ce,dynamic29234-6-9-Video-8744edeac3b4d1ce16b680916b5267ce,dynamic29513-3-5-Video-8744edeac3b4d1ce16b680916b5267ce,dynamic29514-2-9-Video-8744edeac3b4d1ce16b680916b5267ce"

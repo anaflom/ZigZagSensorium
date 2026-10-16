@@ -35,12 +35,12 @@
 set -euo pipefail
 
 # --- Configuration -----------------------------------------------------------
-PROJECT_DIR="/u/mdmc/anaflom/projects_mdmc/ZigZagSensorium"
+PROJECT_DIR="/u/area/anaflom/projects_mdmc/ZigZagSensorium"
 SCRIPT="${PROJECT_DIR}/scripts/classify_labels_within_mouse_ablation_shuffle.py"
 VENV_DIR="${PROJECT_DIR}/.venv-gpu"
 
 DATA_ROOT="${DATA_ROOT:-/orfeo/scratch/area/ygardinazzi/sensorium_2026/derivatives/grid-15x15x10_norm-by_minmax}"
-META_ROOT="${META_ROOT:-/u/mdmc/anaflom/projects_mdmc/sensorium/metadata}"
+META_ROOT="${META_ROOT:-/u/area/anaflom/projects_mdmc/sensorium/metadata}"
 
 # Mouse selection
 MICE="${MICE:-None}"

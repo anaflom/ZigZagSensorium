@@ -30,16 +30,16 @@
 set -euo pipefail
 
 # --- Configuration -----------------------------------------------------------
-PROJECT_DIR="/u/mdmc/anaflom/projects_mdmc/ZigZagSensorium"
+PROJECT_DIR="/u/area/anaflom/projects_mdmc/ZigZagSensorium"
 DATA_ROOT="/orfeo/scratch/area/ygardinazzi/sensorium_2026/derivatives/grid-15x15x10_norm-by_minmax"
 VENV_DIR="${PROJECT_DIR}/.venv-genoa"
 SCRIPT="${PROJECT_DIR}/scripts/compute_zigzag.py"
 
 # Threshold percentile (can be overridden via --export=P_ACTIVE=...)
-P_ACTIVE="${P_ACTIVE:-30}"
+P_ACTIVE="${P_ACTIVE:-70}"
 
 # Set p active per trial to True to compute separate thresholds for each trial (overrides p_active)
-P_ACTIVE_PER_TRIAL="${P_ACTIVE_PER_TRIAL:-False}"
+P_ACTIVE_PER_TRIAL="${P_ACTIVE_PER_TRIAL:-True}"
 
 # Number of parallel workers (match cpus-per-task)
 N_WORKERS="${SLURM_CPUS_PER_TASK:-32}"

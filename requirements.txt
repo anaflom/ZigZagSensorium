@@ -20,4 +20,9 @@ torch>=2.0
 matplotlib>=3.7
 scipy>=1.9
 jupyter>=1.0
-scikit-image
+scikit-image>=0.26
+
+# Required by scripts/detect_scene_cuts.py (scene-cut detection in NaturalVideo clips)
+scenedetect>=0.7.2
+opencv-python-headless>=4.8
+transnetv2-pytorch>=1.0.5

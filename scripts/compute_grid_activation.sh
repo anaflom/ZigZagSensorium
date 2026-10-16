@@ -36,12 +36,12 @@
 set -euo pipefail
 
 # --- Configuration -----------------------------------------------------------
-PROJECT_DIR="/u/mdmc/anaflom/projects_mdmc/ZigZagSensorium"
+PROJECT_DIR="/u/area/anaflom/projects_mdmc/ZigZagSensorium"
 SCRIPT="${PROJECT_DIR}/scripts/compute_grid_activation.py"
 VENV_DIR="${PROJECT_DIR}/.venv-genoa"
 
 DATA_ROOT="${DATA_ROOT:-/orfeo/scratch/area/ygardinazzi/sensorium/data/sensorium_all_2023}"
-META_ROOT="${META_ROOT:-/u/mdmc/anaflom/projects_mdmc/sensorium/metadata}"
+META_ROOT="${META_ROOT:-/u/area/anaflom/projects_mdmc/sensorium/metadata}"
 ROOT_OUTPUT="${ROOT_OUTPUT:-/orfeo/scratch/area/ygardinazzi/sensorium_2026/derivatives/grid-15x15x10_norm-by_minmax}"
 
 # Optional controls

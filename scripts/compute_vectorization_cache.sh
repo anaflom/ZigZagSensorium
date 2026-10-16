@@ -21,12 +21,12 @@
 
 set -euo pipefail
 
-PROJECT_DIR="/u/mdmc/anaflom/projects_mdmc/ZigZagSensorium"
+PROJECT_DIR="/u/area/anaflom/projects_mdmc/ZigZagSensorium"
 SCRIPT="${PROJECT_DIR}/scripts/compute_vectorization_cache.py"
 VENV_DIR="${VENV_DIR:-${PROJECT_DIR}/.venv-genoa}"
 
 DATA_ROOT="${DATA_ROOT:-/orfeo/scratch/area/ygardinazzi/sensorium_2026/derivatives/grid-15x15x10_norm-by_minmax}"
-META_ROOT="${META_ROOT:-/u/mdmc/anaflom/projects_mdmc/sensorium/metadata}"
+META_ROOT="${META_ROOT:-/u/area/anaflom/projects_mdmc/sensorium/metadata}"
 
 MICE="${MICE:-None}"
 CACHE_DIR="${CACHE_DIR:-}"
