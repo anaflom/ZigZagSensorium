@@ -51,15 +51,15 @@ META_ROOT="${META_ROOT:-/u/area/anaflom/projects_mdmc/sensorium/metadata}"
 
 # Mouse selection
 # DEFAULT_MICE="dynamic29156-11-10-Video-8744edeac3b4d1ce16b680916b5267ce,dynamic29228-2-10-Video-8744edeac3b4d1ce16b680916b5267ce,dynamic29234-6-9-Video-8744edeac3b4d1ce16b680916b5267ce,dynamic29513-3-5-Video-8744edeac3b4d1ce16b680916b5267ce,dynamic29514-2-9-Video-8744edeac3b4d1ce16b680916b5267ce"
-DEFAULT_MICE="dynamic29234-6-9-Video-8744edeac3b4d1ce16b680916b5267ce,dynamic29513-3-5-Video-8744edeac3b4d1ce16b680916b5267ce"
+DEFAULT_MICE="dynamic29156-11-10-Video-8744edeac3b4d1ce16b680916b5267ce,dynamic29228-2-10-Video-8744edeac3b4d1ce16b680916b5267ce"
 MICE="${MICE:-${DEFAULT_MICE}}"
 
-P_ACTIVE="${P_ACTIVE:-30}"
+P_ACTIVE="${P_ACTIVE:-70}"
 PER_TRIAL_THRESH="${PER_TRIAL_THRESH:-true}"
 CLIP_FRAMES="${CLIP_FRAMES:-None}"
 GRID_SUBDIR="${GRID_SUBDIR:-trials_grid}"
 MAX_TRIALS="${MAX_TRIALS:-None}"
-MODELS="${MODELS:-logreg,cnn3d_raw,cnn3d_norm}"
+MODELS="${MODELS:-logreg,cnn3d_raw}"
 
 CACHE_DIR="${CACHE_DIR:-}"
 

@@ -50,11 +50,11 @@ DATA_ROOT="${DATA_ROOT:-/orfeo/scratch/area/ygardinazzi/sensorium_2026/derivativ
 META_ROOT="${META_ROOT:-/u/area/anaflom/projects_mdmc/sensorium/metadata}"
 
 # Core parameters
-P_ACTIVE="${P_ACTIVE:-30}"
+P_ACTIVE="${P_ACTIVE:-70}"
 PER_TRIAL_THRESH="${PER_TRIAL_THRESH:-true}"
 METHOD="${METHOD:-Turnover}"
 MICE="${MICE:-None}"
-MODELS="${MODELS:-logreg,mlp,cnn1d,cnn3d_raw,cnn3d_norm}"
+MODELS="${MODELS:-logreg,cnn3d_raw}"
 CLIP_FRAMES="${CLIP_FRAMES:-240}"
 GRID_SUBDIR="${GRID_SUBDIR:-trials_grid}"
 N_SPLITS="${N_SPLITS:-5}"

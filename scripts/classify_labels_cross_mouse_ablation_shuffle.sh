@@ -45,7 +45,7 @@ META_ROOT="${META_ROOT:-/u/area/anaflom/projects_mdmc/sensorium/metadata}"
 
 # Mouse selection
 MICE="${MICE:-None}"
-MODELS="${MODELS:-logreg,mlp,cnn1d,cnn3d_raw,cnn3d_norm}"
+MODELS="${MODELS:-logreg,cnn3d_raw}"
 
 # Shuffle parameters
 N_SHUFFLES="${N_SHUFFLES:-1}"
@@ -54,7 +54,7 @@ SEED="${SEED:-42}"
 DIFFERENT_SHUFFLE_PER_TRIAL="${DIFFERENT_SHUFFLE_PER_TRIAL:-true}"
 
 # Vectorization parameters (must match generation)
-P_ACTIVE="${P_ACTIVE:-30}"
+P_ACTIVE="${P_ACTIVE:-70}"
 PER_TRIAL_THRESH="${PER_TRIAL_THRESH:-true}"
 VECTORIZATION_METHOD="${VECTORIZATION_METHOD:-Turnover}"
 CLIP_FRAMES="${CLIP_FRAMES:-240}"
