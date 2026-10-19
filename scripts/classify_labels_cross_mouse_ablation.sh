@@ -56,7 +56,7 @@ DATA_ROOT="${DATA_ROOT:-/orfeo/scratch/area/ygardinazzi/sensorium_2026/derivativ
 META_ROOT="${META_ROOT:-/u/area/anaflom/projects_mdmc/sensorium/metadata}"
 
 # Core parameters
-P_ACTIVE="${P_ACTIVE:-70}"
+P_ACTIVE="${P_ACTIVE:-30}"
 PER_TRIAL_THRESH="${PER_TRIAL_THRESH:-true}"
 METHOD="${METHOD:-Turnover}"
 MICE="${MICE:-None}"

@@ -48,7 +48,8 @@ PROJECT_DIR="${PROJECT_DIR:-$(pwd)}"
 VENV_DIR="${VENV_DIR:-${PROJECT_DIR}/.venv-genoa}"
 
 NOTEBOOK="${1:-${NOTEBOOK:-notebooks/turnover_intepretability.ipynb}}"
-OUTPUT="${OUTPUT:-turnover_intepretability_results.ipynb}"
+# default output: <notebook>_results.ipynb next to the notebook (OUTPUT="" overwrites in place)
+OUTPUT="${OUTPUT-$(basename "${NOTEBOOK}" .ipynb)_results.ipynb}"
 CELL_TIMEOUT="${CELL_TIMEOUT:-20000}"
 KERNEL_NAME="${KERNEL_NAME:-python3}"
 ALLOW_ERRORS="${ALLOW_ERRORS:-false}"

@@ -36,7 +36,7 @@ VENV_DIR="${PROJECT_DIR}/.venv-genoa"
 SCRIPT="${PROJECT_DIR}/scripts/compute_zigzag.py"
 
 # Threshold percentile (can be overridden via --export=P_ACTIVE=...)
-P_ACTIVE="${P_ACTIVE:-70}"
+P_ACTIVE="${P_ACTIVE:-30}"
 
 # Set p active per trial to True to compute separate thresholds for each trial (overrides p_active)
 P_ACTIVE_PER_TRIAL="${P_ACTIVE_PER_TRIAL:-True}"

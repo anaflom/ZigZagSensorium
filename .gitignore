@@ -19,10 +19,11 @@ notebooks/test*.ipynb
 notebooks/.ipynb_checkpoints/
 notebooks/cache/
 notebooks/*_run.ipynb
-notebooks/*_results.ipynb
+notebooks/*_results*.ipynb
 
 # Results
 results/
+results_old_backup/
 
 # Tests
 tests/

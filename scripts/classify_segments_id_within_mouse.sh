@@ -54,7 +54,7 @@ META_ROOT="${META_ROOT:-/u/area/anaflom/projects_mdmc/sensorium/metadata}"
 DEFAULT_MICE="dynamic29156-11-10-Video-8744edeac3b4d1ce16b680916b5267ce,dynamic29228-2-10-Video-8744edeac3b4d1ce16b680916b5267ce"
 MICE="${MICE:-${DEFAULT_MICE}}"
 
-P_ACTIVE="${P_ACTIVE:-70}"
+P_ACTIVE="${P_ACTIVE:-30}"
 PER_TRIAL_THRESH="${PER_TRIAL_THRESH:-true}"
 CLIP_FRAMES="${CLIP_FRAMES:-None}"
 GRID_SUBDIR="${GRID_SUBDIR:-trials_grid}"
