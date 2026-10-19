@@ -71,7 +71,7 @@ SEGMENT_ID_LABELS: Tuple[str, ...] = (
     "GaussianDot",
 )
 DEFAULT_SEGMENT_LENGTHS: Dict[str, int] = {
-    "NaturalImages": 12,
+    "NaturalImages": 15,
     "PinkNoise": 27,
     "RandomDots": 60,
     "Gabor": 25,
