@@ -333,13 +333,19 @@ FitFn = Callable[[np.ndarray, np.ndarray, int], np.ndarray]
 
 
 def _scores(y_true: np.ndarray, y_pred: np.ndarray) -> Dict[str, float]:
+    import warnings
+
     from sklearn.metrics import accuracy_score, balanced_accuracy_score, f1_score
 
-    return {
-        "accuracy": float(accuracy_score(y_true, y_pred)),
-        "balanced_accuracy": float(balanced_accuracy_score(y_true, y_pred)),
-        "macro_f1": float(f1_score(y_true, y_pred, average="macro", zero_division=0)),
-    }
+    # Leave-one-trial-out folds hold one trial (often one class), which makes
+    # sklearn warn about single labels / predicted classes absent from y_true.
+    with warnings.catch_warnings():
+        warnings.filterwarnings("ignore", category=UserWarning, module="sklearn")
+        return {
+            "accuracy": float(accuracy_score(y_true, y_pred)),
+            "balanced_accuracy": float(balanced_accuracy_score(y_true, y_pred)),
+            "macro_f1": float(f1_score(y_true, y_pred, average="macro", zero_division=0)),
+        }
 
 
 def evaluate_unit(
