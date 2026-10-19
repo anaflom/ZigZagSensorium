@@ -168,6 +168,10 @@ results/
     └── grid/<model>/<shuffle>-<mode>/<target>_<scope>/<run>/shuffle-NNNN/
 ```
 
+Grid problems too long for the 18 h GPU limit (within-mouse `segment_id`) run as one
+job per mouse sharing one run folder, written to `repeat-NN_<mouse>` (`--part`);
+`scripts/run_classify-grid.sh` submits all grid classifications this way.
+
 Each `repeat-NN` / `shuffle-NNNN` folder contains:
 
 - `metrics.csv`: one row per classification problem (pooled accuracy, balanced accuracy, macro-F1, chance, fold mean/std)

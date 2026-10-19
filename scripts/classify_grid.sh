@@ -10,7 +10,7 @@
 #SBATCH --gres=gpu:V100:1
 #SBATCH --cpus-per-task=8
 #SBATCH --mem=160G
-#SBATCH --time=24:00:00
+#SBATCH --time=18:00:00
 #SBATCH --output=logs/slurm-zz-classify-grid-%A_%a.out
 #SBATCH --error=logs/slurm-zz-classify-grid-%A_%a.err
 
@@ -23,6 +23,11 @@
 #   TARGET=video_label SCOPE=cross_mouse N_REPEATS=5 sbatch scripts/classify_grid.sh
 # or one repeat per array task (all tasks share one run folder):
 #   TARGET=video_label SCOPE=cross_mouse sbatch --array=0-4 scripts/classify_grid.sh
+#
+# Problems too long for one job (within-mouse segment_id) can be split into
+# one job per mouse that share a run folder (see scripts/run_classify-grid.sh):
+#   TARGET=segment_id SCOPE=within_mouse MICE=<mouse> PART=<mouse> RUN_NAME=<shared> \
+#     sbatch --array=0-4 scripts/classify_grid.sh
 #
 # Results: results/grid/<MODEL>/<TARGET>_<SCOPE>/<run>/repeat-NN/
 # ==========================================================================
@@ -40,6 +45,7 @@ META_ROOT="${META_ROOT:-/u/area/anaflom/projects_mdmc/sensorium/metadata}"
 TARGET="${TARGET:?Set TARGET=video_label|video_id|segment_id}"
 SCOPE="${SCOPE:?Set SCOPE=within_mouse|cross_mouse}"
 MICE="${MICE:-None}"
+PART="${PART:-}"  # set when several jobs (e.g. one per mouse) share RUN_NAME
 GRID_SUBDIR="${GRID_SUBDIR:-trials_grid}"
 
 # Model and repeats
@@ -105,6 +111,7 @@ CMD=(
   --run-name "${RUN_NAME}"
 )
 [[ "${MICE}" != "None" && -n "${MICE}" ]] && CMD+=(--mice "${MICE}")
+[[ -n "${PART}" ]] && CMD+=(--part "${PART}")
 [[ -n "${CLIP_FRAMES}" ]] && CMD+=(--clip-frames "${CLIP_FRAMES}")
 [[ -n "${CV_SCHEME}" ]] && CMD+=(--cv-scheme "${CV_SCHEME}")
 [[ -n "${MIN_REPETITIONS}" ]] && CMD+=(--min-repetitions "${MIN_REPETITIONS}")

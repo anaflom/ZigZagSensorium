@@ -52,6 +52,12 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--n-repeats", default=1, type=int)
     p.add_argument("--repeat-start", default=0, type=int, help="Index of the first repeat (for array jobs)")
     p.add_argument("--init-seed", default=42, type=int, help="Base seed; repeat r uses init_seed + r")
+    p.add_argument(
+        "--part",
+        default="",
+        help="Tag for jobs that each run a subset of mice into the same run folder "
+        "(results go to repeat-NN_<part>), e.g. one job per mouse",
+    )
     add_training_args(p)
     add_output_args(p)
     return p
@@ -75,7 +81,7 @@ def main() -> int:
     normalize = args.model == "cnn3d_norm"
 
     for repeat in range(args.repeat_start, args.repeat_start + args.n_repeats):
-        out_dir = run_dir / f"repeat-{repeat:02d}"
+        out_dir = run_dir / (f"repeat-{repeat:02d}" + (f"_{args.part}" if args.part else ""))
         out_dir.mkdir(parents=True, exist_ok=True)
         init_seed = args.init_seed + repeat
         with Tee(out_dir / "run.log"):
@@ -109,6 +115,7 @@ def main() -> int:
                     "p_active": None,
                     "thresh_mode": "",
                     "repeat": repeat,
+                    "part": args.part,
                     "init_seed": init_seed,
                     "split_seed": args.split_seed,
                 }
