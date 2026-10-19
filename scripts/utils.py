@@ -328,6 +328,135 @@ def load_vectorization_cache(cache_path: Path) -> Dict[str, Any]:
     return out
 
 
+# Vectorizations whose features are frame-aligned blocks (one block of length
+# n_frames per homology dimension), so that the first L frames of each block of
+# an unclipped cache equal the features computed with clip_frames=L.  Only add a
+# method here after checking this equivalence against an exact-clip cache.
+FRAME_ALIGNED_BLOCKS: Dict[str, int] = {
+    "Turnover": 3,  # [H0 | H1 | H2]; verified against clip240 caches (p30/p50/p70)
+}
+
+
+def is_frame_aligned_method(method: str) -> bool:
+    return method in FRAME_ALIGNED_BLOCKS
+
+
+def slice_frame_aligned_features(
+    xmat: np.ndarray,
+    method: str,
+    start_frames: Sequence[int],
+    n_frames: Sequence[int],
+) -> np.ndarray:
+    """Cut per-row windows [start, start + n) out of each frame-aligned block.
+
+    ``xmat`` rows are full-length features of a frame-aligned method; the output
+    row ``i`` concatenates, for every block, frames ``start_frames[i]`` to
+    ``start_frames[i] + n_frames[i]``.  All windows must have the same length.
+    """
+    if method not in FRAME_ALIGNED_BLOCKS:
+        raise ValueError(f"Method '{method}' is not registered as frame-aligned; cannot slice it")
+    xmat = np.asarray(xmat)
+    n_blocks = FRAME_ALIGNED_BLOCKS[method]
+    if xmat.ndim != 2 or xmat.shape[1] % n_blocks != 0:
+        raise ValueError(f"Unexpected {method} feature shape {xmat.shape} for {n_blocks} blocks")
+    block_len = int(xmat.shape[1] // n_blocks)
+    starts = np.asarray(start_frames, dtype=np.int64)
+    lengths = np.asarray(n_frames, dtype=np.int64)
+    if starts.shape[0] != xmat.shape[0] or lengths.shape[0] != xmat.shape[0]:
+        raise ValueError("start_frames/n_frames must have one entry per feature row")
+    if len(np.unique(lengths)) > 1:
+        raise ValueError(f"All windows must have the same length, got {sorted(set(lengths.tolist()))}")
+    if xmat.shape[0] == 0:
+        return np.zeros((0, 0), dtype=xmat.dtype)
+    length = int(lengths[0])
+    if np.any(starts < 0) or length <= 0 or np.any(starts + length > block_len):
+        raise ValueError(
+            f"Window outside the cached frame range (block length {block_len}): "
+            f"start in [{int(starts.min())}, {int(starts.max())}], length {length}"
+        )
+    cols = np.concatenate(
+        [b * block_len + starts[:, None] + np.arange(length)[None, :] for b in range(n_blocks)],
+        axis=1,
+    )
+    return np.take_along_axis(xmat, cols, axis=1)
+
+
+def load_feature_cache(
+    *,
+    data_root: Path,
+    mouse_name: str,
+    method: str,
+    p_active: int,
+    per_trial_thresh: bool,
+    clip_frames: Optional[int],
+    cache_dir: Optional[Path] = None,
+    stem_suffix: str = "",
+) -> Dict[str, Any]:
+    """Load a vectorization cache for one mouse, clipped to ``clip_frames``.
+
+    Resolution order:
+      1. the exact cache for ``clip_frames`` (``..._clip<N>{stem_suffix}.npz``);
+      2. for frame-aligned methods only, the unclipped cache
+         (``..._clipnone{stem_suffix}.npz``) cut to its first ``clip_frames`` frames;
+      3. otherwise a RuntimeError naming the cache to compute.
+
+    Returns a dict with ``features`` (n_trials x n_features), ``trial_ids``,
+    ``cache_path`` and ``source`` (``"exact"`` or ``"sliced-from-clipnone"``).
+    """
+    clip_used = int(clip_frames) if clip_frames is not None else None
+    mouse_cache_dir = Path(cache_dir) if cache_dir is not None else Path(data_root) / mouse_name / "cache"
+
+    def _path_for(clip: Optional[int]) -> Path:
+        stem = build_vectorization_cache_stem(mouse_name, method, p_active, per_trial_thresh, clip)
+        return mouse_cache_dir / f"{stem}{stem_suffix}.npz"
+
+    def _read(path: Path) -> Tuple[np.ndarray, np.ndarray]:
+        cache = load_vectorization_cache(path)
+        if "features" in cache:
+            xmat = np.asarray(cache["features"])
+        elif "X" in cache:
+            xmat = np.asarray(cache["X"])
+        else:
+            raise RuntimeError(f"Cache missing feature matrix: {path}")
+        if "trial_ids" not in cache:
+            raise RuntimeError(f"Cache has no trial_ids, cannot align trials: {path}")
+        trial_ids = np.asarray(cache["trial_ids"]).astype(np.int64)
+        if len(trial_ids) != xmat.shape[0]:
+            raise RuntimeError(f"Cache trial_ids/feature rows mismatch in {path}")
+        return np.nan_to_num(xmat), trial_ids
+
+    exact_path = _path_for(clip_used)
+    if exact_path.exists():
+        xmat, trial_ids = _read(exact_path)
+        return {"features": xmat, "trial_ids": trial_ids, "cache_path": str(exact_path), "source": "exact"}
+
+    full_path = _path_for(None)
+    if clip_used is not None and is_frame_aligned_method(method) and full_path.exists():
+        xmat, trial_ids = _read(full_path)
+        n = xmat.shape[0]
+        sliced = slice_frame_aligned_features(xmat, method, np.zeros(n, dtype=np.int64), np.full(n, clip_used))
+        return {
+            "features": sliced,
+            "trial_ids": trial_ids,
+            "cache_path": str(full_path),
+            "source": "sliced-from-clipnone",
+        }
+
+    tried = [str(exact_path)]
+    if clip_used is not None and is_frame_aligned_method(method):
+        tried.append(str(full_path))
+    raise RuntimeError(
+        f"Missing vectorization cache for {mouse_name} (tried: {', '.join(tried)}). "
+        + _build_vectorization_precompute_hint(
+            mouse_name=mouse_name,
+            method=method,
+            p_active=p_active,
+            per_trial_thresh=per_trial_thresh,
+            clip_frames=clip_used,
+        )
+    )
+
+
 def build_shuffled_grid_cache_dir(cache_root: Path, cache_stem: str) -> Path:
     """Return the directory that stores shuffled grid files for one cache stem."""
     return Path(cache_root) / f"{cache_stem}_grids"
@@ -500,7 +629,7 @@ def _build_vectorization_precompute_hint(
     clip_token = "None" if clip_frames is None else str(int(clip_frames))
     return (
         "Compute it first with: "
-        "python3 scripts/generate_vectorization_cache.py "
+        "python3 scripts/compute_vectorization_cache.py "
         f"--mice {mouse_name} "
         f"--vectorization-method {method} "
         f"--p-active {int(p_active)} "
@@ -529,18 +658,12 @@ def load_or_compute_vectorization_features(
     """Strictly load vectorization features from cache.
 
     This helper no longer computes vectorizations on cache miss. Use
-    scripts/generate_vectorization_cache.py to precompute missing caches.
+    scripts/compute_vectorization_cache.py to precompute missing caches.
+    The cache is resolved with :func:`load_feature_cache`: the exact-clip cache
+    if present, otherwise (frame-aligned methods only) the unclipped cache cut
+    to ``clip_frames``.
     """
     clip_used = int(clip_frames) if clip_frames is not None else None
-    cache_stem = build_vectorization_cache_stem(
-        mouse_name=mouse_name,
-        method=method,
-        p_active=p_active,
-        per_trial_thresh=per_trial_thresh,
-        clip_frames=clip_used,
-    )
-    mouse_cache_dir = cache_dir if cache_dir is not None else data_root / mouse_name / "cache"
-    cache_path = mouse_cache_dir / f"{cache_stem}.npz"
 
     if force_recompute:
         raise RuntimeError(
@@ -555,32 +678,26 @@ def load_or_compute_vectorization_features(
             + " and pass --force-recompute true there."
         )
 
-    if not cache_path.exists():
-        raise RuntimeError(
-            f"{message_prefix}Missing vectorization cache: {cache_path}. "
-            + _build_vectorization_precompute_hint(
-                mouse_name=mouse_name,
-                method=method,
-                p_active=p_active,
-                per_trial_thresh=per_trial_thresh,
-                clip_frames=clip_used,
-            )
+    try:
+        loaded = load_feature_cache(
+            data_root=Path(data_root),
+            mouse_name=mouse_name,
+            method=method,
+            p_active=p_active,
+            per_trial_thresh=per_trial_thresh,
+            clip_frames=clip_used,
+            cache_dir=cache_dir,
         )
-
-    cache = load_vectorization_cache(cache_path)
-    if "features" in cache:
-        xmat = np.asarray(cache["features"])
-    elif "X" in cache:
-        xmat = np.asarray(cache["X"])
-    else:
-        raise RuntimeError(f"{message_prefix}Cache missing feature matrix: {cache_path}")
-    xmat = np.nan_to_num(xmat)
+    except RuntimeError as exc:
+        raise RuntimeError(f"{message_prefix}{exc}") from exc
+    xmat = np.asarray(loaded["features"])
+    cache_path = Path(loaded["cache_path"])
+    if loaded["source"] != "exact":
+        print(f"{message_prefix}Using {cache_path.name} cut to clip_frames={clip_used}")
 
     if expected_trial_ids is not None:
         expected = [int(t) for t in expected_trial_ids]
-        cache_trial_ids: Optional[List[int]] = None
-        if "trial_ids" in cache:
-            cache_trial_ids = [int(t) for t in np.asarray(cache["trial_ids"]).tolist()]
+        cache_trial_ids: Optional[List[int]] = [int(t) for t in np.asarray(loaded["trial_ids"]).tolist()]
 
         if cache_trial_ids is not None:
             if len(cache_trial_ids) != int(xmat.shape[0]):

@@ -24,6 +24,7 @@ notebooks/*_results*.ipynb
 # Results
 results/
 results_old_backup/
+results_legacy/
 
 # Tests
 tests/
