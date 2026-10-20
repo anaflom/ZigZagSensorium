@@ -61,8 +61,15 @@ def _opt_csv_list(value: str) -> Optional[List[str]]:
     return items if items else None
 
 
-def _build_zz_folder(p_active: int, per_trial_thresh: bool) -> str:
-    """Build zigzag folder name from threshold options."""
+def abs_threshold_token(threshold: float) -> str:
+    """Folder token compute_zigzag.py uses for a fixed threshold (0 -> 'abs-0')."""
+    return f"abs-{float(threshold):.8f}".rstrip("0").rstrip(".")
+
+
+def _build_zz_folder(p_active: Optional[int], per_trial_thresh: bool, abs_threshold: Optional[float] = None) -> str:
+    """Build zigzag folder name from threshold options (fixed threshold if abs_threshold is given)."""
+    if abs_threshold is not None:
+        return f"trials_zz-thresh-{abs_threshold_token(abs_threshold)}"
     if per_trial_thresh:
         return f"trials_zz-thresh-{p_active}-per-trial"
     return f"trials_zz-thresh-{p_active}"
@@ -312,14 +319,18 @@ def build_vectorization_cache_stem(
     p_active: Optional[int],
     per_trial_thresh: bool,
     clip_frames: Optional[int],
+    abs_threshold: Optional[float] = None,
 ) -> str:
     """Build a deterministic cache stem for vectorized features.
 
     ``p_active=None`` is for features that do not depend on the zigzag
     threshold (e.g. grid moments): the stem then has no threshold part.
+    A fixed zigzag threshold gives an ``abs<T>`` part instead of ``p<P>_pertrial<0|1>``.
     """
     method_safe = re.sub(r"[^a-zA-Z0-9_-]+", "_", method).strip("_")
     clip_part = "none" if clip_frames is None else str(int(clip_frames))
+    if abs_threshold is not None:
+        return f"{mouse_name}_{method_safe}_{abs_threshold_token(abs_threshold).replace('-', '', 1)}_clip{clip_part}"
     if p_active is None:
         return f"{mouse_name}_{method_safe}_clip{clip_part}"
     per_trial_part = "pertrial1" if per_trial_thresh else "pertrial0"
@@ -344,9 +355,11 @@ FRAME_ALIGNED_BLOCKS: Dict[str, int] = {
     # so cutting them is exact by construction.
     "GridMomentsRaw": 3,  # [mean | CV | skewness] across grid cells
     "GridMomentsDensity": 3,  # same, cells divided by neuron density
+    "GridMomentsStd": 3,  # [mean | std | skewness]
+    "GridMomentsStdDensity": 3,  # same, density-normalized cells
     "ActiveFraction": 1,  # fraction of grid points above the zigzag threshold
 }
-GRID_STATS_METHODS = ("GridMomentsRaw", "GridMomentsDensity", "ActiveFraction")
+GRID_STATS_METHODS = ("GridMomentsRaw", "GridMomentsDensity", "GridMomentsStd", "GridMomentsStdDensity", "ActiveFraction")
 
 
 def is_frame_aligned_method(method: str) -> bool:
@@ -403,6 +416,7 @@ def load_feature_cache(
     clip_frames: Optional[int],
     cache_dir: Optional[Path] = None,
     stem_suffix: str = "",
+    abs_threshold: Optional[float] = None,
 ) -> Dict[str, Any]:
     """Load a vectorization cache for one mouse, clipped to ``clip_frames``.
 
@@ -419,7 +433,7 @@ def load_feature_cache(
     mouse_cache_dir = Path(cache_dir) if cache_dir is not None else Path(data_root) / mouse_name / "cache"
 
     def _path_for(clip: Optional[int]) -> Path:
-        stem = build_vectorization_cache_stem(mouse_name, method, p_active, per_trial_thresh, clip)
+        stem = build_vectorization_cache_stem(mouse_name, method, p_active, per_trial_thresh, clip, abs_threshold)
         return mouse_cache_dir / f"{stem}{stem_suffix}.npz"
 
     def _read(path: Path) -> Tuple[np.ndarray, np.ndarray]:
@@ -465,6 +479,7 @@ def load_feature_cache(
             p_active=p_active,
             per_trial_thresh=per_trial_thresh,
             clip_frames=clip_used,
+            abs_threshold=abs_threshold,
         )
     )
 
@@ -637,8 +652,14 @@ def _build_vectorization_precompute_hint(
     p_active: Optional[int],
     per_trial_thresh: bool,
     clip_frames: Optional[int],
+    abs_threshold: Optional[float] = None,
 ) -> str:
     clip_token = "None" if clip_frames is None else str(int(clip_frames))
+    thresh_args = (
+        f"--abs-threshold {abs_threshold} "
+        if abs_threshold is not None
+        else f"--p-active {int(p_active)} --per-trial-thresh {'true' if per_trial_thresh else 'false'} "
+    )
     if method in GRID_STATS_METHODS:
         return (
             "Compute it first with: python3 scripts/compute_grid_stats_cache.py "
@@ -649,9 +670,8 @@ def _build_vectorization_precompute_hint(
         "python3 scripts/compute_vectorization_cache.py "
         f"--mice {mouse_name} "
         f"--vectorization-method {method} "
-        f"--p-active {int(p_active)} "
-        f"--per-trial-thresh {'true' if per_trial_thresh else 'false'} "
-        f"--clip-frames {clip_token}"
+        + thresh_args
+        + f"--clip-frames {clip_token}"
     )
 
 

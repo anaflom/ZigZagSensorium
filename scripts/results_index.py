@@ -40,19 +40,37 @@ KIND_DIRS = {
 }
 
 
+# Results written before the grid-type level existed were computed on this grid.
+LEGACY_GRID_TYPE = "grid-15x15x10_norm-by_minmax"
+
+
 def find_result_dirs(results_root: Path = DEFAULT_RESULTS_ROOT, kind: str = "classification") -> List[Path]:
-    """All repeat-NN / shuffle-NNNN folders that contain a metrics.csv."""
+    """All repeat-NN / shuffle-NNNN folders that contain a metrics.csv.
+
+    Looks under ``<results_root>/<grid_type>/<input>/`` and, for results not yet
+    migrated to the grid-type level, under ``<results_root>/<input>/``.
+    """
     if kind not in KIND_DIRS:
         raise ValueError(f"kind must be one of {list(KIND_DIRS)}")
+    root = Path(results_root)
+    bases = [root / top for top in KIND_DIRS[kind]]
+    if root.exists():
+        for grid_dir in sorted(d for d in root.iterdir() if d.is_dir() and d.name not in sum(KIND_DIRS.values(), ())):
+            bases.extend(grid_dir / top for top in KIND_DIRS[kind])
     out: List[Path] = []
-    for top in KIND_DIRS[kind]:
-        base = Path(results_root) / top
+    for base in bases:
         if base.exists():
             out.extend(sorted(p.parent for p in base.rglob("metrics.csv")))
     return out
 
 
-def _read(dirs: Iterable[Path], filename: str) -> pd.DataFrame:
+def _grid_type_from_path(result_dir: Path, results_root: Path) -> str:
+    rel = Path(result_dir).relative_to(results_root).parts
+    tops = sum(KIND_DIRS.values(), ())
+    return LEGACY_GRID_TYPE if rel[0] in tops else rel[0]
+
+
+def _read(dirs: Iterable[Path], filename: str, results_root: Path = DEFAULT_RESULTS_ROOT) -> pd.DataFrame:
     frames = []
     for d in dirs:
         path = d / filename
@@ -61,6 +79,8 @@ def _read(dirs: Iterable[Path], filename: str) -> pd.DataFrame:
         df = pd.read_csv(path)
         df.insert(0, "run_dir", str(d.parent))
         df.insert(1, "result_dir", str(d))
+        if "grid_type" not in df.columns:
+            df.insert(2, "grid_type", _grid_type_from_path(d, Path(results_root)))
         frames.append(df)
     return pd.concat(frames, ignore_index=True) if frames else pd.DataFrame()
 
@@ -89,9 +109,9 @@ def load_metrics(
     most recent run folder is kept for each (input, vectorization, model,
     p_active, thresh_mode, target, scope) combination.
     """
-    df = _filter(_read(find_result_dirs(results_root, kind), "metrics.csv"), filters)
+    df = _filter(_read(find_result_dirs(results_root, kind), "metrics.csv", results_root), filters)
     if latest_run_only and not df.empty:
-        keys = ["input", "vectorization", "model", "p_active", "thresh_mode", "target", "scope"]
+        keys = ["grid_type", "input", "vectorization", "model", "p_active", "thresh_mode", "target", "scope"]
         keys = [k for k in keys if k in df.columns]
         latest = df.groupby(keys, dropna=False)["run_dir"].transform("max")
         df = df[df["run_dir"] == latest]
@@ -99,11 +119,11 @@ def load_metrics(
 
 
 def load_fold_metrics(results_root: Path = DEFAULT_RESULTS_ROOT, kind: str = "classification", **filters: Any) -> pd.DataFrame:
-    return _filter(_read(find_result_dirs(results_root, kind), "fold_metrics.csv"), filters).reset_index(drop=True)
+    return _filter(_read(find_result_dirs(results_root, kind), "fold_metrics.csv", results_root), filters).reset_index(drop=True)
 
 
 def load_predictions(results_root: Path = DEFAULT_RESULTS_ROOT, kind: str = "classification", **filters: Any) -> pd.DataFrame:
-    return _filter(_read(find_result_dirs(results_root, kind), "predictions.csv"), filters).reset_index(drop=True)
+    return _filter(_read(find_result_dirs(results_root, kind), "predictions.csv", results_root), filters).reset_index(drop=True)
 
 
 def load_run_config(result_dir: Path) -> Dict[str, Any]:
@@ -119,7 +139,7 @@ def summarize_repeats(
     """Mean, std and count of ``values`` over repeats (or ``over="shuffle_id"``) per problem."""
     keys = [
         c
-        for c in ["input", "vectorization", "model", "p_active", "thresh_mode", "shuffle_type", "shuffle_mode",
+        for c in ["grid_type", "input", "vectorization", "model", "p_active", "thresh_mode", "shuffle_type", "shuffle_mode",
                   "target", "scope", "run_dir", "unit_id", "label", "mouse", "chance"]
         if c in metrics.columns
     ]
@@ -150,7 +170,7 @@ def main() -> int:
     if df.empty:
         print("No results found.")
         return 0
-    cols = [c for c in ["input", "vectorization", "model", "p_active", "thresh_mode", "target", "scope", "run_dir"] if c in df.columns]
+    cols = [c for c in ["grid_type", "input", "vectorization", "model", "p_active", "thresh_mode", "target", "scope", "run_dir"] if c in df.columns]
     print(df.groupby(cols, dropna=False).size().rename("n_rows").reset_index().to_string(index=False))
     return 0
 

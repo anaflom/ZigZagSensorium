@@ -28,6 +28,8 @@ from pathlib import Path
 
 from classification_data import build_problems
 from classification_engine import (
+    grid_type,
+    results_base,
     MODEL_TITLES,
     VECTOR_MODELS,
     TrainConfig,
@@ -37,6 +39,7 @@ from classification_engine import (
     default_run_name,
     problem_config_from_args,
     run_vector_classification,
+    thresh_mode,
     thresh_tag,
 )
 from classification_features import ZigzagFeatures
@@ -55,8 +58,9 @@ def build_parser() -> argparse.ArgumentParser:
     add_problem_args(p)
     g = p.add_argument_group("zigzag features")
     g.add_argument("--vectorization", default="Turnover", help="Vectorization method of the caches")
-    g.add_argument("--p-active", required=True, type=int)
-    g.add_argument("--per-trial-thresh", required=True, type=_str2bool)
+    g.add_argument("--p-active", default=None, type=int)
+    g.add_argument("--per-trial-thresh", default=True, type=_str2bool)
+    g.add_argument("--abs-threshold", default=None, type=float, help="Fixed zigzag threshold instead of --p-active")
     g.add_argument("--cache-dir", default=None, type=Path, help="Default: <data-root>/<mouse>/cache")
     add_repeat_args(p)
     add_training_args(p)
@@ -66,12 +70,15 @@ def build_parser() -> argparse.ArgumentParser:
 
 def main() -> int:
     args = build_parser().parse_args()
+    if (args.p_active is None) == (args.abs_threshold is None):
+        print("Give exactly one of --p-active or --abs-threshold", file=sys.stderr)
+        return 2
     problem_cfg = problem_config_from_args(args)
     train_cfg = TrainConfig.from_args(args)
-    tag = thresh_tag(args.p_active, args.per_trial_thresh)
+    tag = thresh_tag(args.p_active, args.per_trial_thresh, args.abs_threshold)
 
     run_dir = args.output_dir or (
-        args.results_root
+        results_base(args)
         / "zigzag"
         / args.vectorization
         / args.model
@@ -98,15 +105,18 @@ def main() -> int:
             p_active=args.p_active,
             per_trial_thresh=args.per_trial_thresh,
             cache_dir=args.cache_dir,
+            abs_threshold=args.abs_threshold,
         ),
         context={
+            "grid_type": grid_type(args),
             "target": args.target,
             "scope": args.scope,
             "input": "zigzag",
             "vectorization": args.vectorization,
             "model": args.model,
             "p_active": args.p_active,
-            "thresh_mode": "per-trial" if args.per_trial_thresh else "global",
+            "thresh_mode": thresh_mode(args.per_trial_thresh, args.abs_threshold),
+            "abs_threshold": args.abs_threshold,
         },
         title=f"{args.target} {args.scope} | zigzag {args.vectorization} {tag} | {MODEL_TITLES[args.model]}",
     )

@@ -50,6 +50,7 @@ class RunState:
     skip_existing: bool
     compare_reference_root: Optional[Path]
     fortran_source: Path
+    trialmean_floor: float = 0.01
 
 
 def _default_fortran_source() -> Path:
@@ -60,9 +61,9 @@ def _default_fortran_source() -> Path:
 def _normalization_token(normalization: Optional[str]) -> str:
     if normalization is None:
         return "no-normalization"
-    if normalization == "by_minmax":
-        return "by_minmax"
-    raise ValueError("Normalization can only be None or 'by_minmax'.")
+    if normalization in NORMALIZATIONS:
+        return normalization
+    raise ValueError(f"Normalization can only be None or one of {NORMALIZATIONS}.")
 
 
 def load_neuron_metadata(meta_root: Path, mouse_name: str) -> Tuple[np.ndarray, np.ndarray, np.ndarray]:
@@ -124,17 +125,37 @@ def create_grid_3d(
     return (xg, yg, zg), (x_lin, y_lin, z_lin)
 
 
+NORMALIZATIONS = ("by_minmax", "by_trialmean")
+
+
 def normalize_responses(
     data: np.ndarray,
     normalization: Optional[str],
     min_activation: np.ndarray,
     max_activation: np.ndarray,
+    trialmean_floor: float = 0.01,
 ) -> Tuple[np.ndarray, int]:
+    """Normalize one trial's responses (neurons x frames).
+
+    by_minmax     (x - min) / (max - min), with each neuron's recording-wide min/max.
+    by_trialmean  (x - m) / m, with m the neuron's mean over this trial's frames
+                  (relative deviation from its own trial mean).  Neurons with
+                  m < trialmean_floor (silent in the trial) are set to 0.  The
+                  PCS grid is linear, so every grid cell then has zero mean over
+                  the trial.  The returned count is the number of silent neurons.
+    """
     if normalization is None:
         return data, 0
 
+    if normalization == "by_trialmean":
+        mean = data.mean(axis=1)
+        silent = mean < trialmean_floor
+        out = np.zeros_like(data)
+        out[~silent] = (data[~silent] - mean[~silent, None]) / mean[~silent, None]
+        return out, int(silent.sum())
+
     if normalization != "by_minmax":
-        raise ValueError("Normalization can only be None or 'by_minmax'.")
+        raise ValueError(f"Normalization can only be None or one of {NORMALIZATIONS}.")
 
     denom = max_activation - min_activation
     zero_denom = int(np.sum(denom == 0))
@@ -249,6 +270,7 @@ def _run_single_trial(
     xyz_ranges: Tuple[Tuple[float, float], Tuple[float, float], Tuple[float, float]],
     assign_module,
     skip_existing: bool,
+    trialmean_floor: float = 0.01,
 ) -> Dict[str, object]:
     src_file = _resolve_trial_response_file(responses_dir, trial_id)
     if src_file is None:
@@ -290,6 +312,7 @@ def _run_single_trial(
         normalization=normalization,
         min_activation=min_activation,
         max_activation=max_activation,
+        trialmean_floor=trialmean_floor,
     )
 
     grid_activity = compute_grid_activity_3d(
@@ -457,6 +480,7 @@ def run_pipeline(state: RunState) -> Dict[str, object]:
                 xyz_ranges=xyz_ranges,
                 assign_module=assign_module,
                 skip_existing=state.skip_existing,
+                trialmean_floor=state.trialmean_floor,
             )
             status = result["status"]
             if status == "processed":
@@ -473,7 +497,20 @@ def run_pipeline(state: RunState) -> Dict[str, object]:
             "mouse": mouse_name,
             "num_grid": [int(x) for x in state.num_grid],
             "normalization": state.normalization,
-            "normalization_source": "responses.get_data(by_minmax) parity",
+            "normalization_source": (
+                "responses.get_data(by_minmax) parity"
+                if state.normalization == "by_minmax"
+                else f"(x - trial mean) / trial mean per neuron; trial mean < {state.trialmean_floor} -> 0"
+            ),
+            "trialmean_floor": state.trialmean_floor if state.normalization == "by_trialmean" else None,
+            "silent_neurons_per_trial": (
+                {
+                    "mean": float(np.mean([r["zero_denom_neurons"] for r in processed])) if processed else None,
+                    "max": int(max(r["zero_denom_neurons"] for r in processed)) if processed else None,
+                }
+                if state.normalization == "by_trialmean"
+                else None
+            ),
             "trial_filter": "valid_response == True and valid_trial == True",
             "trial_file_match_rule": "trial id extracted from filename via trial-<id> or numeric stem",
             "output_filename_pattern": f"{prefix}rec-<mouse_name>_trial-<trial_id>.npy",
@@ -550,7 +587,13 @@ def build_arg_parser() -> argparse.ArgumentParser:
         "--normalization",
         type=str,
         default="by_minmax",
-        help="Use 'none' or 'by_minmax'.",
+        help="Use 'none', 'by_minmax' or 'by_trialmean'.",
+    )
+    parser.add_argument(
+        "--trialmean-floor",
+        type=float,
+        default=0.01,
+        help="by_trialmean: neurons with a trial mean below this are set to 0 for that trial",
     )
     parser.add_argument("--mice", type=_opt_csv_list, default=None)
     parser.add_argument("--n-workers", type=int, default=1)
@@ -574,9 +617,9 @@ def _normalize_arg(value: Optional[str]) -> Optional[str]:
     v = value.strip().lower()
     if v in {"none", "null", ""}:
         return None
-    if v == "by_minmax":
-        return "by_minmax"
-    raise ValueError("--normalization must be one of: none, by_minmax")
+    if v in NORMALIZATIONS:
+        return v
+    raise ValueError(f"--normalization must be one of: none, {', '.join(NORMALIZATIONS)}")
 
 
 def main() -> int:
@@ -598,6 +641,7 @@ def main() -> int:
         skip_existing=bool(args.skip_existing),
         compare_reference_root=args.compare_reference_root,
         fortran_source=args.fortran_source,
+        trialmean_floor=float(args.trialmean_floor),
     )
 
     result = run_pipeline(state)

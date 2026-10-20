@@ -35,6 +35,7 @@ MAX_TRIALS="${MAX_TRIALS:-None}"
 VECTORIZATION_METHOD="${VECTORIZATION_METHOD:-Turnover}"
 P_ACTIVE="${P_ACTIVE:-50}"
 PER_TRIAL_THRESH="${PER_TRIAL_THRESH:-true}"
+ABS_THRESHOLD="${ABS_THRESHOLD:-}"  # fixed zigzag threshold (e.g. 0) instead of P_ACTIVE
 CLIP_FRAMES="${CLIP_FRAMES:-None}"
 
 NUM_WORKERS="${NUM_WORKERS:-32}"
@@ -65,13 +66,18 @@ CMD=(
   --data-root "${DATA_ROOT}"
   --meta-root "${META_ROOT}"
   --vectorization-method "${VECTORIZATION_METHOD}"
-  --p-active "${P_ACTIVE}"
   --per-trial-thresh "${PER_TRIAL_THRESH}"
   --clip-frames "${CLIP_FRAMES}"
   --num-workers "${NUM_WORKERS}"
   --progress-every "${PROGRESS_EVERY}"
   --force-recompute "${FORCE_RECOMPUTE}"
 )
+
+if [[ -n "${ABS_THRESHOLD}" ]]; then
+  CMD+=(--abs-threshold "${ABS_THRESHOLD}")
+else
+  CMD+=(--p-active "${P_ACTIVE}")
+fi
 
 if [[ -n "${CACHE_DIR}" ]]; then
   mkdir -p "${CACHE_DIR}"

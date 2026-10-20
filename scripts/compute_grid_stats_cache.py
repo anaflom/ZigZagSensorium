@@ -11,13 +11,17 @@ computed across the grid cells, so they ignore where activity is and only keep
 how much there is and how it is distributed:
 
 GridMomentsRaw      [mean | CV | skewness] of the raw grid values.
-GridMomentsDensity  same, after dividing each cell by its neuron density (the
+GridMomentsStd      [mean | std | skewness] of the raw grid values (std instead of
+                    CV, which is undefined for zero-mean grids such as by_trialmean).
+GridMomentsStdDensity  same, on density-normalized cells.
+GridMomentsDensity  [mean | CV | skewness] after dividing each cell by its neuron density (the
                     PCS-weighted neuron count used to build the grid), using only
                     cells with density >= --min-density.  The grid sums neuron
                     activity, so raw-grid spread partly reflects how unevenly
                     neurons are packed; this version removes that.
 ActiveFraction      fraction of grid points above the zigzag threshold of the
-                    trial (read from the zigzag output), one cache per P_ACTIVE.
+                    trial (read from the zigzag output), one cache per P_ACTIVE
+                    and per fixed threshold (--abs-thresholds).
 
 Caches use the vectorization-cache format (features / trial_ids / labels /
 valid_frames) with frame-aligned blocks of length max(valid_frames) of the
@@ -44,7 +48,14 @@ from scipy.stats import skew
 
 from classification_data import load_mouse_trials
 from compute_grid_activation import get_ranges_from_positions, load_neuron_metadata
-from utils import _build_zz_folder, _discover_mice, _opt_csv_list, _str2bool, build_vectorization_cache_stem
+from utils import (
+    _build_zz_folder,
+    _discover_mice,
+    _opt_csv_list,
+    _str2bool,
+    abs_threshold_token,
+    build_vectorization_cache_stem,
+)
 
 
 # ---------------------------------------------------------------------------
@@ -84,17 +95,25 @@ def neuron_density(
     return density
 
 
+MOMENT_SETS: Dict[str, List[str]] = {
+    "GridMomentsRaw": ["mean", "cv", "skewness"],
+    "GridMomentsDensity": ["mean", "cv", "skewness"],
+    "GridMomentsStd": ["mean", "std", "skewness"],
+    "GridMomentsStdDensity": ["mean", "std", "skewness"],
+}
+
+
 # ---------------------------------------------------------------------------
 # Per-trial statistics
 # ---------------------------------------------------------------------------
 
-def _moments(x: np.ndarray) -> np.ndarray:
-    """[mean, CV, skewness] across rows of x (cells x frames) -> (3, frames)."""
+def _moments(x: np.ndarray) -> Dict[str, np.ndarray]:
+    """Per-frame statistics across rows of x (cells x frames), each (frames,)."""
     mean = x.mean(axis=0)
     std = x.std(axis=0)
     cv = np.divide(std, mean, out=np.zeros_like(mean), where=mean > 0)
     sk = np.nan_to_num(skew(x, axis=0, bias=True))
-    return np.stack([mean, cv, sk])
+    return {"mean": mean, "std": std, "cv": cv, "skewness": sk}
 
 
 def _trial_stats(
@@ -102,17 +121,19 @@ def _trial_stats(
     valid_frames: int,
     density_flat: np.ndarray,
     density_mask: np.ndarray,
-    thresholds: Dict[int, Optional[float]],
+    thresholds: Dict[str, Optional[float]],
 ) -> Dict[str, np.ndarray]:
     grid = np.load(grid_path).astype(np.float64)
     n_frames = int(min(valid_frames, grid.shape[-1]))
     x = grid.reshape(-1, grid.shape[-1])[:, :n_frames]
-    out = {
-        "GridMomentsRaw": _moments(x),
-        "GridMomentsDensity": _moments(x[density_mask] / density_flat[density_mask, None]),
-    }
-    for p, thr in thresholds.items():
-        out[f"ActiveFraction_p{p}"] = None if thr is None else (x > thr).mean(axis=0)[None, :]
+    raw = _moments(x)
+    dens = _moments(x[density_mask] / density_flat[density_mask, None])
+    out = {}
+    for method, names in MOMENT_SETS.items():
+        src = dens if "Density" in method else raw
+        out[method] = np.stack([src[n] for n in names])
+    for label, thr in thresholds.items():
+        out[f"ActiveFraction_{label}"] = None if thr is None else (x > thr).mean(axis=0)[None, :]
     return out
 
 
@@ -186,20 +207,24 @@ def process_mouse(args: argparse.Namespace, mouse: str) -> None:
         flush=True,
     )
 
-    # Zigzag thresholds per P_ACTIVE (per trial, keyed by grid filename)
-    thr_by_p: Dict[int, Tuple[Dict[str, float], Optional[float]]] = {}
-    for p in args.p_active:
-        zz_dir = args.data_root / mouse / _build_zz_folder(p, args.per_trial_thresh)
+    # Zigzag thresholds (per trial, keyed by grid filename, or one fixed value)
+    specs = [(f"p{p}", p, None) for p in args.p_active] + [
+        (abs_threshold_token(a), None, a) for a in args.abs_thresholds
+    ]
+    thr_by_label: Dict[str, Tuple[Dict[str, float], Optional[float]]] = {}
+    spec_by_label = {label: (p, a) for label, p, a in specs}
+    for label, p, a in specs:
+        zz_dir = args.data_root / mouse / _build_zz_folder(p, args.per_trial_thresh, a)
         try:
-            thr_by_p[p] = _read_thresholds(zz_dir, args.per_trial_thresh)
+            thr_by_label[label] = _read_thresholds(zz_dir, args.per_trial_thresh and a is None)
         except FileNotFoundError as exc:
-            print(f"    no thresholds for p={p}: {exc}", flush=True)
+            print(f"    no thresholds for {label}: {exc}", flush=True)
 
-    def thresholds_for(grid_path: str) -> Dict[int, Optional[float]]:
+    def thresholds_for(grid_path: str) -> Dict[str, Optional[float]]:
         name = Path(grid_path).name
-        out: Dict[int, Optional[float]] = {}
-        for p, (per_trial, glob_thr) in thr_by_p.items():
-            out[p] = per_trial.get(name, glob_thr) if per_trial else glob_thr
+        out: Dict[str, Optional[float]] = {}
+        for label, (per_trial, glob_thr) in thr_by_label.items():
+            out[label] = per_trial.get(name, glob_thr) if per_trial else glob_thr
         return out
 
     results: List[Optional[Dict[str, np.ndarray]]] = [None] * len(trials)
@@ -215,18 +240,27 @@ def process_mouse(args: argparse.Namespace, mouse: str) -> None:
                 print(f"    {n_done}/{len(jobs)} trials ({time.time() - t0:.0f}s)", flush=True)
 
     common = {"min_density": args.min_density, "n_cells_density": int(mask.sum()), "num_grid": np.asarray(num_grid)}
-    for method in ("GridMomentsRaw", "GridMomentsDensity"):
+    for method, names in MOMENT_SETS.items():
         path = cache_dir / f"{build_vectorization_cache_stem(mouse, method, None, False, None)}.npz"
-        _save(path, [r[method] for r in results], trials, method, {**common, "feature_names": ["mean", "cv", "skewness"]})
+        _save(path, [r[method] for r in results], trials, method, {**common, "feature_names": names})
         print(f"    saved {path.name}", flush=True)
-    for p in thr_by_p:
-        blocks = [r[f"ActiveFraction_p{p}"] for r in results]
+    for label in thr_by_label:
+        p, a = spec_by_label[label]
+        blocks = [r[f"ActiveFraction_{label}"] for r in results]
         missing = [str(t) for t, b in zip(trials["trial_id"], blocks) if b is None]
         if missing:
-            print(f"    p={p}: {len(missing)} trial(s) without a zigzag threshold (e.g. {missing[:5]}); cache not written", flush=True)
+            print(f"    {label}: {len(missing)} trial(s) without a zigzag threshold (e.g. {missing[:5]}); cache not written", flush=True)
             continue
-        path = cache_dir / f"{build_vectorization_cache_stem(mouse, 'ActiveFraction', p, args.per_trial_thresh, None)}.npz"
-        _save(path, blocks, trials, "ActiveFraction", {"p_active": p, "per_trial_thresh": args.per_trial_thresh, "feature_names": ["active_fraction"]})
+        stem = build_vectorization_cache_stem(mouse, "ActiveFraction", p, args.per_trial_thresh, None, a)
+        path = cache_dir / f"{stem}.npz"
+        _save(
+            path,
+            blocks,
+            trials,
+            "ActiveFraction",
+            {"p_active": -1 if p is None else p, "abs_threshold": np.nan if a is None else a,
+             "per_trial_thresh": args.per_trial_thresh, "feature_names": ["active_fraction"]},
+        )
         print(f"    saved {path.name}", flush=True)
     print(f"  {mouse}: done in {time.time() - t0:.0f}s", flush=True)
 
@@ -239,8 +273,14 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--cache-dir", default=None, type=Path, help="Default: <data-root>/<mouse>/cache")
     p.add_argument("--mice", default=None, type=_opt_csv_list)
     p.add_argument("--min-density", default=0.5, type=float, help="Minimum neuron density of cells used for GridMomentsDensity")
-    p.add_argument("--p-active", default=[30, 50, 70], type=lambda s: [int(v) for v in s.split(",")], help="Comma-separated P_ACTIVE values for ActiveFraction")
+    p.add_argument("--p-active", default=[30, 50, 70], type=lambda s: [int(v) for v in s.split(",")] if s else [], help="Comma-separated P_ACTIVE values for ActiveFraction")
     p.add_argument("--per-trial-thresh", default=True, type=_str2bool)
+    p.add_argument(
+        "--abs-thresholds",
+        default=[],
+        type=lambda s: [float(v) for v in s.split(",")] if s else [],
+        help="Comma-separated fixed zigzag thresholds for ActiveFraction (e.g. 0)",
+    )
     p.add_argument("--num-workers", default=8, type=int)
     return p
 

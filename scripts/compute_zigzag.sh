@@ -31,7 +31,7 @@ set -euo pipefail
 
 # --- Configuration -----------------------------------------------------------
 PROJECT_DIR="/u/area/anaflom/projects_mdmc/ZigZagSensorium"
-DATA_ROOT="/orfeo/scratch/area/ygardinazzi/sensorium_2026/derivatives/grid-15x15x10_norm-by_minmax"
+DATA_ROOT="${DATA_ROOT:-/orfeo/scratch/area/ygardinazzi/sensorium_2026/derivatives/grid-15x15x10_norm-by_minmax}"
 VENV_DIR="${PROJECT_DIR}/.venv-genoa"
 SCRIPT="${PROJECT_DIR}/scripts/compute_zigzag.py"
 
@@ -40,6 +40,14 @@ P_ACTIVE="${P_ACTIVE:-30}"
 
 # Set p active per trial to True to compute separate thresholds for each trial (overrides p_active)
 P_ACTIVE_PER_TRIAL="${P_ACTIVE_PER_TRIAL:-True}"
+
+# Fixed threshold instead of a percentile (e.g. THRESHOLD=0: grid value > 0 is active;
+# zz-top convention: cells active when -value < threshold). Output: trials_zz-thresh-abs-<T>/
+THRESHOLD="${THRESHOLD:-}"
+THRESHOLD_ARGS=()
+if [[ -n "${THRESHOLD}" ]]; then
+  THRESHOLD_ARGS=(--threshold "${THRESHOLD}")
+fi
 
 # Number of parallel workers (match cpus-per-task)
 N_WORKERS="${SLURM_CPUS_PER_TASK:-32}"
@@ -64,6 +72,8 @@ echo "Job: ${SLURM_JOB_ID}, Array task: ${SLURM_ARRAY_TASK_ID}"
 echo "Mouse: ${MOUSE_NAME}"
 echo "p_active: ${P_ACTIVE}"
 echo "p_active_per_trial: ${P_ACTIVE_PER_TRIAL}"
+echo "threshold (fixed): ${THRESHOLD:-<none>}"
+echo "data root: ${DATA_ROOT}"
 echo "Workers: ${N_WORKERS}"
 echo "Node: $(hostname)"
 echo "CPUs: ${SLURM_CPUS_PER_TASK}"
@@ -92,6 +102,7 @@ python3 -u "${SCRIPT}" \
     --n-workers "${N_WORKERS}" \
     --n-threshold-samples 20 \
     --max-dim 2 \
+    "${THRESHOLD_ARGS[@]}" \
     --skip-existing
 
 EXIT_CODE=$?

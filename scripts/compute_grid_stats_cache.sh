@@ -37,6 +37,7 @@ CACHE_DIR="${CACHE_DIR:-}"
 MIN_DENSITY="${MIN_DENSITY:-0.5}"
 P_ACTIVE="${P_ACTIVE:-30,50,70}"
 PER_TRIAL_THRESH="${PER_TRIAL_THRESH:-true}"
+ABS_THRESHOLDS="${ABS_THRESHOLDS:-}"  # e.g. 0 (fixed zigzag thresholds for ActiveFraction)
 NUM_WORKERS="${NUM_WORKERS:-32}"
 
 mkdir -p "${PROJECT_DIR}/logs"
@@ -50,6 +51,7 @@ CMD=(
   --min-density "${MIN_DENSITY}"
   --p-active "${P_ACTIVE}"
   --per-trial-thresh "${PER_TRIAL_THRESH}"
+  --abs-thresholds "${ABS_THRESHOLDS}"
   --num-workers "${NUM_WORKERS}"
 )
 [[ "${MICE}" != "None" && -n "${MICE}" ]] && CMD+=(--mice "${MICE}")

@@ -67,6 +67,7 @@ class CachedFeatures:
     per_trial_thresh: bool
     cache_dir: Optional[Path] = None
     stem_suffix: str = ""
+    abs_threshold: Optional[float] = None
     _cache: Dict[Tuple[str, Optional[int]], Dict[str, Any]] = field(default_factory=dict, repr=False)
     sources: Dict[str, Dict[str, Any]] = field(default_factory=dict, repr=False)
 
@@ -82,6 +83,7 @@ class CachedFeatures:
                 clip_frames=clip,
                 cache_dir=self.cache_dir,
                 stem_suffix=self.stem_suffix,
+                abs_threshold=self.abs_threshold,
             )
             loaded["row_of_trial"] = {int(t): i for i, t in enumerate(loaded["trial_ids"])}
             self._cache[key] = loaded

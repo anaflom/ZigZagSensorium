@@ -46,6 +46,7 @@ MICE="${MICE:-None}"
 VECTORIZATION="${VECTORIZATION:-Turnover}"
 P_ACTIVE="${P_ACTIVE:-30}"
 PER_TRIAL_THRESH="${PER_TRIAL_THRESH:-true}"
+ABS_THRESHOLD="${ABS_THRESHOLD:-}"  # fixed zigzag threshold (e.g. 0) instead of P_ACTIVE
 CACHE_DIR="${CACHE_DIR:-}"
 
 # Model and repeats (repeats only matter for neural models)
@@ -75,7 +76,6 @@ CMD=(
   --data-root "${DATA_ROOT}"
   --meta-root "${META_ROOT}"
   --vectorization "${VECTORIZATION}"
-  --p-active "${P_ACTIVE}"
   --per-trial-thresh "${PER_TRIAL_THRESH}"
   --model "${MODEL}"
   --n-repeats "${N_REPEATS}"
@@ -85,6 +85,11 @@ CMD=(
   --split-seed "${SPLIT_SEED}"
   --run-name "${RUN_NAME}"
 )
+if [[ -n "${ABS_THRESHOLD}" ]]; then
+  CMD+=(--abs-threshold "${ABS_THRESHOLD}")
+else
+  CMD+=(--p-active "${P_ACTIVE}")
+fi
 [[ "${MICE}" != "None" && -n "${MICE}" ]] && CMD+=(--mice "${MICE}")
 [[ -n "${CACHE_DIR}" ]] && CMD+=(--cache-dir "${CACHE_DIR}")
 [[ -n "${CLIP_FRAMES}" ]] && CMD+=(--clip-frames "${CLIP_FRAMES}")

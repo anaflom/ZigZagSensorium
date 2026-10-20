@@ -25,6 +25,8 @@ from pathlib import Path
 
 from classification_data import build_problems
 from classification_engine import (
+    grid_type,
+    results_base,
     MODEL_TITLES,
     VECTOR_MODELS,
     Tee,
@@ -105,7 +107,7 @@ def main() -> int:
         cache_dir=args.cache_dir,
     )
     run_dir = args.output_dir or (
-        args.results_root
+        results_base(args)
         / "ablation_shuffle"
         / "zigzag"
         / args.vectorization
@@ -150,6 +152,7 @@ def main() -> int:
 
                 summaries, folds, preds = run_units(problems.units, fit_fn_for_unit, init_seed=args.init_seed)
                 context = {
+                    "grid_type": grid_type(args),
                     "target": args.target,
                     "scope": args.scope,
                     "input": "zigzag",

@@ -429,8 +429,29 @@ def evaluate_unit(
 # Output
 # ---------------------------------------------------------------------------
 
-def thresh_tag(p_active: int, per_trial_thresh: bool) -> str:
+def grid_type(args: argparse.Namespace) -> str:
+    """Grid variant the run uses: the name of the derivatives folder (--data-root)."""
+    return Path(args.data_root).resolve().name
+
+
+def results_base(args: argparse.Namespace) -> Path:
+    """Results are separated by grid type: <results_root>/<grid_type>/..."""
+    return Path(args.results_root) / grid_type(args)
+
+
+def thresh_tag(p_active: Optional[int], per_trial_thresh: bool, abs_threshold: Optional[float] = None) -> str:
+    """Results folder level for the zigzag threshold: p30-per-trial, p30-global or abs-0."""
+    if abs_threshold is not None:
+        from utils import abs_threshold_token
+
+        return abs_threshold_token(abs_threshold)
     return f"p{int(p_active)}-{'per-trial' if per_trial_thresh else 'global'}"
+
+
+def thresh_mode(per_trial_thresh: bool, abs_threshold: Optional[float] = None) -> str:
+    if abs_threshold is not None:
+        return "abs"
+    return "per-trial" if per_trial_thresh else "global"
 
 
 def default_run_name() -> str:

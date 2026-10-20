@@ -27,6 +27,8 @@ import traceback
 
 from classification_data import build_problems
 from classification_engine import (
+    grid_type,
+    results_base,
     GRID_MODELS,
     MODEL_TITLES,
     Tee,
@@ -69,7 +71,7 @@ def main() -> int:
     train_cfg = TrainConfig.from_args(args)
 
     run_dir = args.output_dir or (
-        args.results_root / "grid" / args.model / f"{args.target}_{args.scope}" / (args.run_name or default_run_name())
+        results_base(args) / "grid" / args.model / f"{args.target}_{args.scope}" / (args.run_name or default_run_name())
     )
     run_dir.mkdir(parents=True, exist_ok=True)
 
@@ -107,6 +109,7 @@ def main() -> int:
                 summaries, folds, preds = run_units(problems.units, fit_fn_for_unit, init_seed=init_seed)
 
                 context = {
+                    "grid_type": grid_type(args),
                     "target": args.target,
                     "scope": args.scope,
                     "input": "grid",

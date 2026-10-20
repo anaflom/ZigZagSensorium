@@ -13,8 +13,11 @@ by compute_grid_stats_cache.py:
 
   moments_raw      per-frame [mean | CV | skewness] across grid cells
   moments_density  same, cells divided by their neuron density
+  moments_std, moments_std_density
+                   [mean | std | skewness]: use these on zero-mean grids
+                   (by_trialmean), where the CV is undefined
   active_fraction  per-frame fraction of grid points above the zigzag threshold
-                   (needs --p-active / --per-trial-thresh)
+                   (needs --p-active / --per-trial-thresh, or --abs-threshold)
 
 ``--time-average true`` replaces each per-frame series by its mean over the
 window (one number per statistic): the trial-averaged control, which keeps
@@ -33,6 +36,8 @@ import numpy as np
 
 from classification_data import build_problems
 from classification_engine import (
+    grid_type,
+    results_base,
     MODEL_TITLES,
     TrainConfig,
     add_output_args,
@@ -41,6 +46,7 @@ from classification_engine import (
     default_run_name,
     problem_config_from_args,
     run_vector_classification,
+    thresh_mode,
     thresh_tag,
 )
 from classification_features import CachedFeatures
@@ -49,8 +55,10 @@ from utils import FRAME_ALIGNED_BLOCKS, _opt_int, _str2bool
 
 
 FEATURE_METHODS = {
-    "moments_raw": "GridMomentsRaw",
+    "moments_raw": "GridMomentsRaw",  # mean, CV, skewness
     "moments_density": "GridMomentsDensity",
+    "moments_std": "GridMomentsStd",  # mean, std, skewness (for zero-mean grids)
+    "moments_std_density": "GridMomentsStdDensity",
     "active_fraction": "ActiveFraction",
 }
 
@@ -72,6 +80,7 @@ def build_parser() -> argparse.ArgumentParser:
     g.add_argument("--time-average", default=False, type=_str2bool, help="Average each statistic over the window")
     g.add_argument("--p-active", default=None, type=_opt_int, help="Zigzag threshold (active_fraction only)")
     g.add_argument("--per-trial-thresh", default=True, type=_str2bool, help="(active_fraction only)")
+    g.add_argument("--abs-threshold", default=None, type=float, help="Fixed zigzag threshold (active_fraction only)")
     g.add_argument("--cache-dir", default=None, type=Path, help="Default: <data-root>/<mouse>/cache")
     add_repeat_args(p)
     add_training_args(p)
@@ -83,18 +92,19 @@ def main() -> int:
     args = build_parser().parse_args()
     method = FEATURE_METHODS[args.features]
     uses_threshold = args.features == "active_fraction"
-    if uses_threshold and args.p_active is None:
-        print("--p-active is required for --features active_fraction", file=sys.stderr)
+    if uses_threshold and (args.p_active is None) == (args.abs_threshold is None):
+        print("--features active_fraction needs exactly one of --p-active or --abs-threshold", file=sys.stderr)
         return 2
     p_active = args.p_active if uses_threshold else None
+    abs_threshold = args.abs_threshold if uses_threshold else None
 
     problem_cfg = problem_config_from_args(args)
     train_cfg = TrainConfig.from_args(args)
     feature_name = args.features.replace("_", "-") + ("-trialavg" if args.time_average else "")
 
-    run_dir = args.results_root / "grid_stats" / feature_name / args.model
+    run_dir = results_base(args) / "grid_stats" / feature_name / args.model
     if uses_threshold:
-        run_dir = run_dir / thresh_tag(p_active, args.per_trial_thresh)
+        run_dir = run_dir / thresh_tag(p_active, args.per_trial_thresh, abs_threshold)
     run_dir = args.output_dir or (run_dir / f"{args.target}_{args.scope}" / (args.run_name or default_run_name()))
     run_dir.mkdir(parents=True, exist_ok=True)
 
@@ -115,15 +125,18 @@ def main() -> int:
             p_active=p_active,
             per_trial_thresh=args.per_trial_thresh,
             cache_dir=args.cache_dir,
+            abs_threshold=abs_threshold,
         ),
         context={
+            "grid_type": grid_type(args),
             "target": args.target,
             "scope": args.scope,
             "input": "grid_stats",
             "vectorization": feature_name,
             "model": args.model,
             "p_active": p_active,
-            "thresh_mode": ("per-trial" if args.per_trial_thresh else "global") if uses_threshold else "",
+            "thresh_mode": thresh_mode(args.per_trial_thresh, abs_threshold) if uses_threshold else "",
+            "abs_threshold": abs_threshold,
         },
         title=f"{args.target} {args.scope} | grid stats {feature_name} | {MODEL_TITLES[args.model]}",
         transform=time_average(method) if args.time_average else None,

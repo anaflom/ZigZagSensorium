@@ -34,11 +34,12 @@ VENV_DIR="${VENV_DIR:-${PROJECT_DIR}/.venv-genoa}"
 DATA_ROOT="${DATA_ROOT:-/orfeo/scratch/area/ygardinazzi/sensorium_2026/derivatives/grid-15x15x10_norm-by_minmax}"
 META_ROOT="${META_ROOT:-/u/area/anaflom/projects_mdmc/sensorium/metadata}"
 
-FEATURES="${FEATURES:?Set FEATURES=moments_raw|moments_density|active_fraction}"
+FEATURES="${FEATURES:?Set FEATURES=moments_raw|moments_density|moments_std|moments_std_density|active_fraction}"
 TARGET="${TARGET:?Set TARGET=video_label|video_id|segment_id}"
 SCOPE="${SCOPE:?Set SCOPE=within_mouse|cross_mouse}"
 TIME_AVERAGE="${TIME_AVERAGE:-false}"
 P_ACTIVE="${P_ACTIVE:-}"
+ABS_THRESHOLD="${ABS_THRESHOLD:-}"
 PER_TRIAL_THRESH="${PER_TRIAL_THRESH:-true}"
 MICE="${MICE:-None}"
 CACHE_DIR="${CACHE_DIR:-}"
@@ -74,6 +75,7 @@ CMD=(
   --run-name "${RUN_NAME}"
 )
 [[ -n "${P_ACTIVE}" ]] && CMD+=(--p-active "${P_ACTIVE}")
+[[ -n "${ABS_THRESHOLD}" ]] && CMD+=(--abs-threshold "${ABS_THRESHOLD}")
 [[ "${MICE}" != "None" && -n "${MICE}" ]] && CMD+=(--mice "${MICE}")
 [[ -n "${CACHE_DIR}" ]] && CMD+=(--cache-dir "${CACHE_DIR}")
 # shellcheck disable=SC2206

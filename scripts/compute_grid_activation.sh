@@ -46,7 +46,8 @@ ROOT_OUTPUT="${ROOT_OUTPUT:-/orfeo/scratch/area/ygardinazzi/sensorium_2026/deriv
 
 # Optional controls
 MICE="${MICE:-}"
-NORMALIZATION="${NORMALIZATION:-by_minmax}"
+NORMALIZATION="${NORMALIZATION:-by_minmax}"  # by_minmax | by_trialmean
+TRIALMEAN_FLOOR="${TRIALMEAN_FLOOR:-0.01}"
 NUM_GRID="${NUM_GRID:-15 15 10}"
 N_WORKERS="${N_WORKERS:-${SLURM_CPUS_PER_TASK:-1}}"
 SKIP_EXISTING="${SKIP_EXISTING:-true}"
@@ -95,6 +96,7 @@ CMD=(
   --meta-root "${META_ROOT}"
   --root-output "${ROOT_OUTPUT}"
   --normalization "${NORMALIZATION}"
+  --trialmean-floor "${TRIALMEAN_FLOOR}"
   --num-grid ${NUM_GRID}
   --n-workers "${N_WORKERS}"
 )
