@@ -1,5 +1,7 @@
 #!/bin/bash
-# Submit all grid (3D-CNN) classifications, N_REPEATS repeats each as a Slurm array.
+# Submit all grid (3D-CNN) classifications as Slurm arrays (one task per repeat):
+# N_REPEATS repeats for video_label / video_id, N_REPEATS_SEGMENT (default 1)
+# for segment_id, whose repeats are the most expensive.
 #
 # Each array task runs one repeat and must fit in the 18 h GPU limit.  All
 # schemes fit in one job per repeat except within-mouse segment_id (~4-5 h per
@@ -11,7 +13,7 @@
 set -euo pipefail
 
 N_REPEATS="${N_REPEATS:-5}"
-ARRAY="0-$((N_REPEATS - 1))"
+N_REPEATS_SEGMENT="${N_REPEATS_SEGMENT:-1}"
 RUN_NAME="$(date +%Y%m%d_%H%M%S)"
 
 # Mice with segment metadata (the other mice only have NaturalVideo trials).
@@ -24,6 +26,11 @@ SEGMENT_MICE=(
 )
 
 for TARGET in video_label video_id segment_id; do
+  if [[ "${TARGET}" == "segment_id" ]]; then
+    ARRAY="0-$((N_REPEATS_SEGMENT - 1))"
+  else
+    ARRAY="0-$((N_REPEATS - 1))"
+  fi
   for SCOPE in within_mouse cross_mouse; do
     if [[ "${TARGET}" == "segment_id" && "${SCOPE}" == "within_mouse" ]]; then
       for MOUSE in "${SEGMENT_MICE[@]}"; do
