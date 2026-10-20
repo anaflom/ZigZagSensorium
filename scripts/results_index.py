@@ -35,7 +35,7 @@ PROJECT_DIR = Path(__file__).resolve().parents[1]
 DEFAULT_RESULTS_ROOT = PROJECT_DIR / "results"
 
 KIND_DIRS = {
-    "classification": ("zigzag", "grid"),
+    "classification": ("zigzag", "grid", "grid_stats"),
     "ablation_shuffle": ("ablation_shuffle",),
 }
 

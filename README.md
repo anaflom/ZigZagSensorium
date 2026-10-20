@@ -64,6 +64,8 @@ ZigZagSensorium/
 │   ├── explore_vectorizations.py/.sh
 │   ├── classify_zigzag.py/.sh
 │   ├── classify_grid.py/.sh
+│   ├── compute_grid_stats_cache.py/.sh
+│   ├── classify_grid_stats.py/.sh
 │   ├── generate_trials_ablation_shuffle.py/.sh
 │   ├── ablation_shuffle_zigzag.py/.sh
 │   ├── ablation_shuffle_grid.py/.sh
@@ -115,13 +117,31 @@ Both take `--target` and `--scope`:
 | `within_mouse` | CV within each mouse (`stratified` 5-fold for video_label, leave-one-trial-out for video_id / segment_id) |
 | `cross_mouse` | leave-one-mouse-out (video_label, segment_id); directed mouse pairs (video_id) |
 
-### 3) Shuffle Ablation
+### 3) Structure-Blind Controls (grid statistics)
+
+How much of the classification is explained by the time course of the activity
+*level*, without spatial structure. `scripts/compute_grid_stats_cache.py` computes,
+for every trial and frame, statistics across grid cells:
+
+- `moments_raw`: mean, coefficient of variation and skewness of the grid values.
+- `moments_density`: the same after dividing each cell by its neuron density.
+	The grid sums neuron activity (PCS assignment), so the spread of raw grid values
+	partly reflects how unevenly neurons are packed.
+- `active_fraction`: fraction of grid points above the zigzag threshold of the
+	trial (one per P_ACTIVE), i.e. the level signal seen by the zigzag.
+
+`scripts/classify_grid_stats.py --features <...>` classifies them with the same
+problems and models as the zigzag; `--time-average true` keeps only the mean of each
+statistic over the window (overall level, no time course).
+`scripts/run_classify-grid-stats.sh` submits all combinations.
+
+### 4) Shuffle Ablation
 
 1. `scripts/generate_trials_ablation_shuffle.py`: generate shuffled grids and their vectorization caches.
 2. `scripts/ablation_shuffle_zigzag.py` / `scripts/ablation_shuffle_grid.py`: run the same
 	classification problems on the shuffled data, once per shuffle.
 
-### 4) Similarity Analyses
+### 5) Similarity Analyses
 
 - `scripts/similarity_id_within_mouse.py`
 	Within-mouse trial/ID similarity analyses.
@@ -163,6 +183,7 @@ sbatch scripts/similarity_id_cross_mouse.sh
 results/
 ├── zigzag/<vectorization>/<model>/p<P>-<per-trial|global>/<target>_<scope>/<run>/repeat-NN/
 ├── grid/<model>/<target>_<scope>/<run>/repeat-NN/
+├── grid_stats/<features>[-trialavg]/<model>/[p<P>-<...>/]<target>_<scope>/<run>/repeat-NN/
 └── ablation_shuffle/
     ├── zigzag/<vectorization>/<model>/<shuffle>-<mode>/p<P>-<...>/<target>_<scope>/<run>/shuffle-NNNN/
     └── grid/<model>/<shuffle>-<mode>/<target>_<scope>/<run>/shuffle-NNNN/

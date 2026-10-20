@@ -50,19 +50,20 @@ def mouse_cache_dir(data_root: Path, mouse: str, cache_dir: Optional[Path]) -> P
 # ---------------------------------------------------------------------------
 
 @dataclass
-class ZigzagFeatures:
-    """Vectorization features read from the per-mouse caches.
+class CachedFeatures:
+    """Features read from per-mouse caches (zigzag vectorizations or grid statistics).
 
     For windows starting at frame 0 with a common length L (video_label,
     video_id) the cache for clip L is used: the exact ``..._clip<L>`` cache if
     present, otherwise (frame-aligned methods such as Turnover) the unclipped
     cache cut to L frames.  Other windows (segment_id) are cut from the
-    unclipped cache and need a frame-aligned method.
+    unclipped cache and need a frame-aligned method.  ``p_active=None`` is for
+    features that do not depend on the zigzag threshold.
     """
 
     data_root: Path
     method: str
-    p_active: int
+    p_active: Optional[int]
     per_trial_thresh: bool
     cache_dir: Optional[Path] = None
     stem_suffix: str = ""
@@ -125,6 +126,10 @@ class ZigzagFeatures:
         for idx, x in zip(order, parts):
             out[idx] = x
         return out
+
+
+# Kept for readability at call sites that read zigzag vectorizations.
+ZigzagFeatures = CachedFeatures
 
 
 # ---------------------------------------------------------------------------
@@ -213,8 +218,8 @@ class ShuffleSource:
             raise FileNotFoundError(f"{len(missing)} shuffled grid file(s) missing, e.g. {missing[:3]}")
         return paths
 
-    def zigzag_features(self, shuffle_id: int) -> ZigzagFeatures:
-        return ZigzagFeatures(
+    def zigzag_features(self, shuffle_id: int) -> CachedFeatures:
+        return CachedFeatures(
             data_root=self.data_root,
             method=self.method,
             p_active=self.p_active,

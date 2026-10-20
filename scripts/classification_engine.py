@@ -574,6 +574,84 @@ def base_config(args: argparse.Namespace, problem_cfg: ProblemConfig, train_cfg:
     }
 
 
+def run_vector_classification(
+    args: argparse.Namespace,
+    *,
+    problems: Any,
+    problem_cfg: ProblemConfig,
+    train_cfg: TrainConfig,
+    run_dir: Path,
+    make_features: Callable[[], Any],
+    context: Dict[str, Any],
+    title: str,
+    transform: Optional[Callable[[np.ndarray, EvalUnit], np.ndarray]] = None,
+) -> int:
+    """Repeat loop shared by the vector-feature entry points (zigzag, grid stats).
+
+    ``make_features()`` returns an object with ``features(samples)`` and a
+    ``sources`` dict; ``transform(x, unit)`` optionally post-processes the
+    feature matrix of a problem (e.g. averaging over time).
+    Uses ``args.model``, ``args.n_repeats``, ``args.repeat_start`` and ``args.init_seed``.
+    """
+    import traceback
+
+    device = configure_torch(train_cfg) if args.model != "logreg" else None
+    for repeat in range(args.repeat_start, args.repeat_start + args.n_repeats):
+        out_dir = run_dir / f"repeat-{repeat:02d}"
+        out_dir.mkdir(parents=True, exist_ok=True)
+        init_seed = args.init_seed + repeat
+        with Tee(out_dir / "run.log"):
+            try:
+                print(f"{title} | repeat {repeat}")
+                print(f"output: {out_dir}")
+                print(f"problems: {len(problems.units)} (skipped {len(problems.skips)}), notes={problems.notes}")
+                features = make_features()
+
+                def fit_fn_for_unit(unit: EvalUnit) -> FitFn:
+                    x = features.features(unit.samples)
+                    if transform is not None:
+                        x = transform(x, unit)
+                    return lambda tr, te, seed: fit_predict_vector(
+                        args.model,
+                        x,
+                        unit.y,
+                        tr,
+                        te,
+                        n_classes=unit.n_classes,
+                        window_frames=unit.window_frames,
+                        seed=seed,
+                        train_cfg=train_cfg,
+                        device=device,
+                    )
+
+                summaries, folds, preds = run_units(problems.units, fit_fn_for_unit, init_seed=init_seed)
+                ctx = {**context, "repeat": repeat, "init_seed": init_seed, "split_seed": args.split_seed}
+                config = base_config(args, problem_cfg, train_cfg if args.model != "logreg" else None)
+                config.update(
+                    {
+                        "context": ctx,
+                        "notes": problems.notes,
+                        "mice_used": problems.mice_used,
+                        "feature_caches": features.sources,
+                    }
+                )
+                write_outputs(
+                    out_dir,
+                    context=ctx,
+                    config=config,
+                    summaries=summaries,
+                    fold_rows=folds,
+                    predictions=preds,
+                    skips=problems.skips,
+                    title=title,
+                )
+                print(f"\nDone: {out_dir}")
+            except Exception:
+                traceback.print_exc()
+                return 1
+    return 0
+
+
 def run_units(
     units: Sequence[EvalUnit],
     fit_fn_for_unit: Callable[[EvalUnit], FitFn],

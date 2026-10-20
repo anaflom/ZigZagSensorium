@@ -309,13 +309,19 @@ def build_vectorizer(method: str, clip_frames: Optional[int] = None) -> object:
 def build_vectorization_cache_stem(
     mouse_name: str,
     method: str,
-    p_active: int,
+    p_active: Optional[int],
     per_trial_thresh: bool,
     clip_frames: Optional[int],
 ) -> str:
-    """Build a deterministic cache stem for vectorized features."""
+    """Build a deterministic cache stem for vectorized features.
+
+    ``p_active=None`` is for features that do not depend on the zigzag
+    threshold (e.g. grid moments): the stem then has no threshold part.
+    """
     method_safe = re.sub(r"[^a-zA-Z0-9_-]+", "_", method).strip("_")
     clip_part = "none" if clip_frames is None else str(int(clip_frames))
+    if p_active is None:
+        return f"{mouse_name}_{method_safe}_clip{clip_part}"
     per_trial_part = "pertrial1" if per_trial_thresh else "pertrial0"
     return f"{mouse_name}_{method_safe}_p{int(p_active)}_{per_trial_part}_clip{clip_part}"
 
@@ -334,7 +340,13 @@ def load_vectorization_cache(cache_path: Path) -> Dict[str, Any]:
 # method here after checking this equivalence against an exact-clip cache.
 FRAME_ALIGNED_BLOCKS: Dict[str, int] = {
     "Turnover": 3,  # [H0 | H1 | H2]; verified against clip240 caches (p30/p50/p70)
+    # Grid statistics (compute_grid_stats_cache.py) are computed frame by frame,
+    # so cutting them is exact by construction.
+    "GridMomentsRaw": 3,  # [mean | CV | skewness] across grid cells
+    "GridMomentsDensity": 3,  # same, cells divided by neuron density
+    "ActiveFraction": 1,  # fraction of grid points above the zigzag threshold
 }
+GRID_STATS_METHODS = ("GridMomentsRaw", "GridMomentsDensity", "ActiveFraction")
 
 
 def is_frame_aligned_method(method: str) -> bool:
@@ -386,7 +398,7 @@ def load_feature_cache(
     data_root: Path,
     mouse_name: str,
     method: str,
-    p_active: int,
+    p_active: Optional[int],
     per_trial_thresh: bool,
     clip_frames: Optional[int],
     cache_dir: Optional[Path] = None,
@@ -622,11 +634,16 @@ def _build_vectorization_precompute_hint(
     *,
     mouse_name: str,
     method: str,
-    p_active: int,
+    p_active: Optional[int],
     per_trial_thresh: bool,
     clip_frames: Optional[int],
 ) -> str:
     clip_token = "None" if clip_frames is None else str(int(clip_frames))
+    if method in GRID_STATS_METHODS:
+        return (
+            "Compute it first with: python3 scripts/compute_grid_stats_cache.py "
+            f"--mice {mouse_name} (see scripts/compute_grid_stats_cache.sh)"
+        )
     return (
         "Compute it first with: "
         "python3 scripts/compute_vectorization_cache.py "
