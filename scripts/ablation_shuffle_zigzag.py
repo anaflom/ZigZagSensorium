@@ -39,9 +39,8 @@ from classification_engine import (
     default_run_name,
     fit_predict_vector,
     problem_config_from_args,
-    run_units,
+    run_and_save,
     thresh_tag,
-    write_outputs,
 )
 from classification_features import SHUFFLE_TYPES, ShuffleSource, sample_shuffle_ids
 from utils import _opt_csv_list, _opt_int, _str2bool
@@ -150,7 +149,6 @@ def main() -> int:
                         device=device,
                     )
 
-                summaries, folds, preds = run_units(problems.units, fit_fn_for_unit, init_seed=args.init_seed)
                 context = {
                     "grid_type": grid_type(args),
                     "target": args.target,
@@ -166,24 +164,29 @@ def main() -> int:
                     "init_seed": args.init_seed,
                     "split_seed": args.split_seed,
                 }
-                config = base_config(args, problem_cfg, train_cfg if args.model != "logreg" else None)
-                config.update(
-                    {
-                        "context": context,
-                        "shuffles": {**source.to_dict(), "shuffle_ids": shuffle_ids},
-                        "notes": problems.notes,
-                        "mice_used": problems.mice_used,
-                        "feature_caches": features.sources,
-                    }
-                )
-                write_outputs(
-                    out_dir,
+
+                def make_config():
+                    config = base_config(args, problem_cfg, train_cfg if args.model != "logreg" else None)
+                    config.update(
+                        {
+                            "context": context,
+                            "shuffles": {**source.to_dict(), "shuffle_ids": shuffle_ids},
+                            "notes": problems.notes,
+                            "mice_used": problems.mice_used,
+                            "feature_caches": features.sources,
+                        }
+                    )
+                    return config
+
+                run_and_save(
+                    problems.units,
+                    fit_fn_for_unit,
+                    init_seed=args.init_seed,
+                    out_dir=out_dir,
                     context=context,
-                    config=config,
-                    summaries=summaries,
-                    fold_rows=folds,
-                    predictions=preds,
+                    make_config=make_config,
                     skips=problems.skips,
+                    resume=args.resume,
                     title=(
                         f"{args.target} {args.scope} | shuffled ({args.shuffle_type}-{source.mode} #{shuffle_id}) "
                         f"zigzag {args.vectorization} {thresh_tag(args.p_active, args.per_trial_thresh)} | "

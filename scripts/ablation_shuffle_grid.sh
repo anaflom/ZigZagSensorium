@@ -58,6 +58,7 @@ SPLIT_SEED="${SPLIT_SEED:-42}"
 EPOCHS_CNN3D="${EPOCHS_CNN3D:-40}"
 NUM_WORKERS_DL="${NUM_WORKERS_DL:-4}"
 RUN_NAME="${RUN_NAME:-$(date +%Y%m%d_%H%M%S)}"
+RESUME="${RESUME:-false}"  # true: after a time-out, rerun with the same RUN_NAME to skip saved problems
 EXTRA_ARGS="${EXTRA_ARGS:-}"
 
 mkdir -p "${PROJECT_DIR}/logs"
@@ -89,6 +90,7 @@ CMD=(
   --epochs-cnn3d "${EPOCHS_CNN3D}"
   --num-workers-dl "${NUM_WORKERS_DL}"
   --run-name "${RUN_NAME}"
+  --resume "${RESUME}"
 )
 if [[ -n "${SHUFFLE_IDS}" ]]; then
   CMD+=(--shuffle-ids "${SHUFFLE_IDS}")

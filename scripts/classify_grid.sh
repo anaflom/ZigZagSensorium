@@ -78,6 +78,7 @@ LR_CNN3D="${LR_CNN3D:-0.0005}"
 WEIGHT_DECAY="${WEIGHT_DECAY:-0.0001}"
 EARLY_STOP_PATIENCE="${EARLY_STOP_PATIENCE:-10}"
 NUM_WORKERS_DL="${NUM_WORKERS_DL:-4}"
+RESUME="${RESUME:-false}"  # true: after a time-out, rerun with the same RUN_NAME to skip saved problems
 EXTRA_ARGS="${EXTRA_ARGS:-}"
 
 mkdir -p "${PROJECT_DIR}/logs"
@@ -109,6 +110,7 @@ CMD=(
   --early-stop-patience "${EARLY_STOP_PATIENCE}"
   --num-workers-dl "${NUM_WORKERS_DL}"
   --run-name "${RUN_NAME}"
+  --resume "${RESUME}"
 )
 [[ "${MICE}" != "None" && -n "${MICE}" ]] && CMD+=(--mice "${MICE}")
 [[ -n "${PART}" ]] && CMD+=(--part "${PART}")

@@ -41,8 +41,7 @@ from classification_engine import (
     default_run_name,
     fit_predict_grid,
     problem_config_from_args,
-    run_units,
-    write_outputs,
+    run_and_save,
 )
 from classification_features import grid_dataset
 
@@ -106,8 +105,6 @@ def main() -> int:
                         device=device,
                     )
 
-                summaries, folds, preds = run_units(problems.units, fit_fn_for_unit, init_seed=init_seed)
-
                 context = {
                     "grid_type": grid_type(args),
                     "target": args.target,
@@ -122,23 +119,28 @@ def main() -> int:
                     "init_seed": init_seed,
                     "split_seed": args.split_seed,
                 }
-                config = base_config(args, problem_cfg, train_cfg)
-                config.update(
-                    {
-                        "context": context,
-                        "notes": problems.notes,
-                        "mice_used": problems.mice_used,
-                        "device": str(device),
-                    }
-                )
-                write_outputs(
-                    out_dir,
+
+                def make_config():
+                    config = base_config(args, problem_cfg, train_cfg)
+                    config.update(
+                        {
+                            "context": context,
+                            "notes": problems.notes,
+                            "mice_used": problems.mice_used,
+                            "device": str(device),
+                        }
+                    )
+                    return config
+
+                run_and_save(
+                    problems.units,
+                    fit_fn_for_unit,
+                    init_seed=init_seed,
+                    out_dir=out_dir,
                     context=context,
-                    config=config,
-                    summaries=summaries,
-                    fold_rows=folds,
-                    predictions=preds,
+                    make_config=make_config,
                     skips=problems.skips,
+                    resume=args.resume,
                     title=f"{args.target} {args.scope} | grid | {MODEL_TITLES[args.model]} | repeat {repeat}",
                 )
                 print(f"\nDone: {out_dir}")

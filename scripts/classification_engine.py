@@ -135,6 +135,12 @@ def add_output_args(parser: argparse.ArgumentParser) -> None:
         help="Run folder name (default: timestamp). Array jobs pass the same name to share one run folder.",
     )
     g.add_argument("--output-dir", default=None, type=Path, help="Write here instead of the standard layout")
+    g.add_argument(
+        "--resume",
+        default=False,
+        type=_str2bool,
+        help="Reuse problems already saved in the output folder (same run name and settings), e.g. after a time-out",
+    )
 
 
 def problem_config_from_args(args: argparse.Namespace) -> ProblemConfig:
@@ -560,11 +566,14 @@ def write_outputs(
     predictions: List[pd.DataFrame],
     skips: List[Dict[str, Any]],
     title: str,
+    status: str = "complete",
+    plot: bool = True,
 ) -> None:
     """Write metrics/fold_metrics/predictions/skips CSVs, config and a summary figure.
 
     ``context`` holds run-level columns (target, scope, input, model, ...) that
     are prepended to every CSV so files can be concatenated without parsing paths.
+    ``status`` ("complete" or "partial k/N") is stored in run_config.json.
     """
     out_dir.mkdir(parents=True, exist_ok=True)
     (out_dir / "figures").mkdir(exist_ok=True)
@@ -580,8 +589,9 @@ def write_outputs(
     preds = pd.concat(predictions, ignore_index=True) if predictions else pd.DataFrame()
     _with_context(preds).to_csv(out_dir / "predictions.csv", index=False)
     pd.DataFrame(skips, columns=["unit_id", "mouse", "label", "reason", "detail"]).to_csv(out_dir / "skips.csv", index=False)
-    write_json(out_dir / "run_config.json", config)
-    plot_summary(metrics, out_dir / "figures" / "summary.png", title)
+    write_json(out_dir / "run_config.json", {**config, "status": status, "units_done": len(summaries)})
+    if plot:
+        plot_summary(metrics, out_dir / "figures" / "summary.png", title)
 
 
 def base_config(args: argparse.Namespace, problem_cfg: ProblemConfig, train_cfg: Optional[TrainConfig]) -> Dict[str, Any]:
@@ -645,26 +655,30 @@ def run_vector_classification(
                         device=device,
                     )
 
-                summaries, folds, preds = run_units(problems.units, fit_fn_for_unit, init_seed=init_seed)
                 ctx = {**context, "repeat": repeat, "init_seed": init_seed, "split_seed": args.split_seed}
-                config = base_config(args, problem_cfg, train_cfg if args.model != "logreg" else None)
-                config.update(
-                    {
-                        "context": ctx,
-                        "notes": problems.notes,
-                        "mice_used": problems.mice_used,
-                        "feature_caches": features.sources,
-                    }
-                )
-                write_outputs(
-                    out_dir,
+
+                def make_config() -> Dict[str, Any]:
+                    config = base_config(args, problem_cfg, train_cfg if args.model != "logreg" else None)
+                    config.update(
+                        {
+                            "context": ctx,
+                            "notes": problems.notes,
+                            "mice_used": problems.mice_used,
+                            "feature_caches": features.sources,
+                        }
+                    )
+                    return config
+
+                run_and_save(
+                    problems.units,
+                    fit_fn_for_unit,
+                    init_seed=init_seed,
+                    out_dir=out_dir,
                     context=ctx,
-                    config=config,
-                    summaries=summaries,
-                    fold_rows=folds,
-                    predictions=preds,
+                    make_config=make_config,
                     skips=problems.skips,
                     title=title,
+                    resume=args.resume,
                 )
                 print(f"\nDone: {out_dir}")
             except Exception:
@@ -673,28 +687,93 @@ def run_vector_classification(
     return 0
 
 
-def run_units(
+def _print_unit_header(i: int, n: int, unit: EvalUnit) -> None:
+    print(
+        f"\n[{i}/{n}] {unit.unit_id}: n={len(unit.y)}, classes={unit.n_classes}, "
+        f"folds={len(unit.splits)} ({unit.cv_scheme}), window={unit.window_frames}",
+        flush=True,
+    )
+
+
+def _load_saved_units(
+    out_dir: Path, context: Dict[str, Any], problem: Dict[str, Any]
+) -> Dict[str, Tuple[Dict[str, Any], List[Dict[str, Any]], pd.DataFrame]]:
+    """Problems already saved in out_dir (for --resume), keyed by unit_id."""
+    cfg_path = out_dir / "run_config.json"
+    if not (out_dir / "metrics.csv").exists() or not cfg_path.exists():
+        return {}
+    with open(cfg_path, encoding="utf-8") as fp:
+        saved = json.load(fp)
+    if saved.get("problem") != json.loads(json.dumps(problem, default=_json_default)):
+        raise RuntimeError(f"--resume: the problem settings in {cfg_path} differ from this run; use another output folder")
+    ctx_cols = list(context)
+    metrics = pd.read_csv(out_dir / "metrics.csv").drop(columns=ctx_cols, errors="ignore")
+    folds = pd.read_csv(out_dir / "fold_metrics.csv").drop(columns=ctx_cols, errors="ignore")
+    preds_path = out_dir / "predictions.csv"
+    preds = pd.read_csv(preds_path).drop(columns=ctx_cols, errors="ignore") if preds_path.stat().st_size else pd.DataFrame()
+    out = {}
+    for summary in metrics.to_dict("records"):
+        uid = summary["unit_id"]
+        out[uid] = (
+            summary,
+            folds[folds["unit_id"] == uid].to_dict("records"),
+            preds[preds["unit_id"] == uid].reset_index(drop=True) if len(preds) else pd.DataFrame(),
+        )
+    return out
+
+
+def run_and_save(
     units: Sequence[EvalUnit],
     fit_fn_for_unit: Callable[[EvalUnit], FitFn],
     *,
     init_seed: int,
-) -> Tuple[List[Dict[str, Any]], List[Dict[str, Any]], List[pd.DataFrame]]:
+    out_dir: Path,
+    context: Dict[str, Any],
+    make_config: Callable[[], Dict[str, Any]],
+    skips: List[Dict[str, Any]],
+    title: str,
+    resume: bool = False,
+) -> None:
+    """Evaluate problems one by one, rewriting the outputs after each.
+
+    A time-out then loses only the problem in progress; run_config.json says
+    ``"status": "partial k/N"`` until all problems are done.  With ``resume``,
+    problems already saved in ``out_dir`` (same problem settings) are reused.
+    Seeds depend only on the problem and the fold, so a resumed run trains
+    exactly as an uninterrupted one would.
+    """
+    done = _load_saved_units(out_dir, context, make_config()["problem"]) if resume else {}
+    if done:
+        print(f"Resuming: {len(done)} of {len(units)} problems already saved in {out_dir}", flush=True)
     summaries: List[Dict[str, Any]] = []
     fold_rows: List[Dict[str, Any]] = []
     predictions: List[pd.DataFrame] = []
+    n = len(units)
     for i, unit in enumerate(units, start=1):
-        print(
-            f"\n[{i}/{len(units)}] {unit.unit_id}: n={len(unit.y)}, classes={unit.n_classes}, "
-            f"folds={len(unit.splits)} ({unit.cv_scheme}), window={unit.window_frames}",
-            flush=True,
-        )
-        summary, folds, preds = evaluate_unit(unit, fit_fn_for_unit(unit), init_seed=init_seed)
-        print(
-            f"  -> acc={summary['accuracy']:.3f} macro_f1={summary['macro_f1']:.3f} "
-            f"(chance={summary['chance']:.3f})",
-            flush=True,
-        )
+        if unit.unit_id in done:
+            summary, folds, preds = done[unit.unit_id]
+            print(f"\n[{i}/{n}] {unit.unit_id}: already saved, skipped", flush=True)
+        else:
+            _print_unit_header(i, n, unit)
+            summary, folds, preds = evaluate_unit(unit, fit_fn_for_unit(unit), init_seed=init_seed)
+            print(
+                f"  -> acc={summary['accuracy']:.3f} macro_f1={summary['macro_f1']:.3f} "
+                f"(chance={summary['chance']:.3f})",
+                flush=True,
+            )
         summaries.append(summary)
         fold_rows.extend(folds)
         predictions.append(preds)
-    return summaries, fold_rows, predictions
+        final = i == n
+        write_outputs(
+            out_dir,
+            context=context,
+            config=make_config(),
+            summaries=summaries,
+            fold_rows=fold_rows,
+            predictions=predictions,
+            skips=skips,
+            title=title,
+            status="complete" if final else f"partial {i}/{n}",
+            plot=final,
+        )

@@ -70,9 +70,26 @@ def _grid_type_from_path(result_dir: Path, results_root: Path) -> str:
     return LEGACY_GRID_TYPE if rel[0] in tops else rel[0]
 
 
-def _read(dirs: Iterable[Path], filename: str, results_root: Path = DEFAULT_RESULTS_ROOT) -> pd.DataFrame:
+def run_status(result_dir: Path) -> str:
+    """'complete', or 'partial k/N' while a run is in progress or was cut off.
+
+    Runs written before the status field existed are complete.
+    """
+    cfg = Path(result_dir) / "run_config.json"
+    if not cfg.exists():
+        return "complete"
+    with open(cfg, encoding="utf-8") as fp:
+        return json.load(fp).get("status", "complete")
+
+
+def _read(
+    dirs: Iterable[Path], filename: str, results_root: Path = DEFAULT_RESULTS_ROOT, include_partial: bool = False
+) -> pd.DataFrame:
     frames = []
     for d in dirs:
+        status = run_status(d)
+        if status != "complete" and not include_partial:
+            continue
         path = d / filename
         if not path.exists() or path.stat().st_size == 0:
             continue
@@ -81,6 +98,8 @@ def _read(dirs: Iterable[Path], filename: str, results_root: Path = DEFAULT_RESU
         df.insert(1, "result_dir", str(d))
         if "grid_type" not in df.columns:
             df.insert(2, "grid_type", _grid_type_from_path(d, Path(results_root)))
+        if include_partial:
+            df.insert(3, "run_status", status)
         frames.append(df)
     return pd.concat(frames, ignore_index=True) if frames else pd.DataFrame()
 
@@ -100,6 +119,7 @@ def load_metrics(
     results_root: Path = DEFAULT_RESULTS_ROOT,
     kind: str = "classification",
     latest_run_only: bool = False,
+    include_partial: bool = False,
     **filters: Any,
 ) -> pd.DataFrame:
     """Concatenate metrics.csv files (one row per classification problem).
@@ -107,9 +127,10 @@ def load_metrics(
     ``filters`` are column=value (or list of values), e.g. ``target="video_id"``,
     ``input="grid"``, ``p_active=[30, 70]``.  With ``latest_run_only`` only the
     most recent run folder is kept for each (input, vectorization, model,
-    p_active, thresh_mode, target, scope) combination.
+    p_active, thresh_mode, target, scope) combination.  Runs still in progress
+    (or cut off) are left out unless ``include_partial``.
     """
-    df = _filter(_read(find_result_dirs(results_root, kind), "metrics.csv", results_root), filters)
+    df = _filter(_read(find_result_dirs(results_root, kind), "metrics.csv", results_root, include_partial), filters)
     if latest_run_only and not df.empty:
         keys = ["grid_type", "input", "vectorization", "model", "p_active", "thresh_mode", "target", "scope"]
         keys = [k for k in keys if k in df.columns]
@@ -118,12 +139,18 @@ def load_metrics(
     return df.reset_index(drop=True)
 
 
-def load_fold_metrics(results_root: Path = DEFAULT_RESULTS_ROOT, kind: str = "classification", **filters: Any) -> pd.DataFrame:
-    return _filter(_read(find_result_dirs(results_root, kind), "fold_metrics.csv", results_root), filters).reset_index(drop=True)
+def load_fold_metrics(
+    results_root: Path = DEFAULT_RESULTS_ROOT, kind: str = "classification", include_partial: bool = False, **filters: Any
+) -> pd.DataFrame:
+    dirs = find_result_dirs(results_root, kind)
+    return _filter(_read(dirs, "fold_metrics.csv", results_root, include_partial), filters).reset_index(drop=True)
 
 
-def load_predictions(results_root: Path = DEFAULT_RESULTS_ROOT, kind: str = "classification", **filters: Any) -> pd.DataFrame:
-    return _filter(_read(find_result_dirs(results_root, kind), "predictions.csv", results_root), filters).reset_index(drop=True)
+def load_predictions(
+    results_root: Path = DEFAULT_RESULTS_ROOT, kind: str = "classification", include_partial: bool = False, **filters: Any
+) -> pd.DataFrame:
+    dirs = find_result_dirs(results_root, kind)
+    return _filter(_read(dirs, "predictions.csv", results_root, include_partial), filters).reset_index(drop=True)
 
 
 def load_run_config(result_dir: Path) -> Dict[str, Any]:
