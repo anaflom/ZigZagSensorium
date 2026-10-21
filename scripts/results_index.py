@@ -134,8 +134,11 @@ def load_metrics(
     if latest_run_only and not df.empty:
         keys = ["grid_type", "input", "vectorization", "model", "p_active", "thresh_mode", "target", "scope"]
         keys = [k for k in keys if k in df.columns]
-        latest = df.groupby(keys, dropna=False)["run_dir"].transform("max")
-        df = df[df["run_dir"] == latest]
+        # Compare run names, not paths: parts of one run can sit in the old and
+        # the grid-type layout until results are migrated.
+        run_name = df["run_dir"].map(lambda p: Path(p).name)
+        latest = run_name.groupby([df[k] for k in keys], dropna=False).transform("max")
+        df = df[run_name == latest]
     return df.reset_index(drop=True)
 
 
