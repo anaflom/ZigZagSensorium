@@ -10,7 +10,14 @@ The problems (samples, classes, frame windows, folds) come from
 classification_data.py and are identical to those of classify_grid.py.
 Features are read from the vectorization caches (compute_vectorization_cache.py).
 
-Output: results/zigzag/<vectorization>/<model>/p<P>-<per-trial|global>/<target>_<scope>/<run>/repeat-NN/
+Output: results/<grid_type>/zigzag/<features>/<model>/<threshold>/<target>_<scope>/<run>/repeat-NN/
+where <features> is the vectorization, with ``-H<dims>`` when only some homology
+dimensions are used (--blocks) and ``+<feature>`` for each added grid statistic
+(--add-features), e.g. ``Turnover-H1+active-fraction``.
+
+Incremental information: comparing ``Turnover+active-fraction`` with the
+active-fraction control alone (classify_grid_stats.py, same folds) measures what
+the topology adds beyond the activity level.
 
 Examples
 --------
@@ -42,8 +49,8 @@ from classification_engine import (
     thresh_mode,
     thresh_tag,
 )
-from classification_features import ZigzagFeatures
-from utils import _str2bool
+from classification_features import GRID_STATS_FEATURES, CachedFeatures, ConcatFeatures
+from utils import _opt_csv_list, _str2bool
 
 
 def add_repeat_args(p: argparse.ArgumentParser) -> None:
@@ -62,10 +69,52 @@ def build_parser() -> argparse.ArgumentParser:
     g.add_argument("--per-trial-thresh", default=True, type=_str2bool)
     g.add_argument("--abs-threshold", default=None, type=float, help="Fixed zigzag threshold instead of --p-active")
     g.add_argument("--cache-dir", default=None, type=Path, help="Default: <data-root>/<mouse>/cache")
+    g.add_argument(
+        "--blocks",
+        default=None,
+        type=lambda s: [int(v) for v in s.split(",")] if s else None,
+        help="Keep only these frame-aligned blocks, i.e. homology dimensions for Turnover (e.g. 1 or 1,2)",
+    )
+    g.add_argument(
+        "--add-features",
+        default=None,
+        type=_opt_csv_list,
+        help=f"Grid statistics appended to the zigzag features ({', '.join(GRID_STATS_FEATURES)}); "
+        "active_fraction uses the same zigzag threshold",
+    )
     add_repeat_args(p)
     add_training_args(p)
     add_output_args(p)
     return p
+
+
+def make_features(args: argparse.Namespace):
+    """Zigzag vectorization (optionally some blocks only), plus appended grid statistics."""
+    zigzag = CachedFeatures(
+        data_root=args.data_root,
+        method=args.vectorization,
+        p_active=args.p_active,
+        per_trial_thresh=args.per_trial_thresh,
+        cache_dir=args.cache_dir,
+        abs_threshold=args.abs_threshold,
+        blocks=args.blocks,
+    )
+    if not args.add_features:
+        return zigzag
+    extra = []
+    for name in args.add_features:
+        uses_threshold = name == "active_fraction"
+        extra.append(
+            CachedFeatures(
+                data_root=args.data_root,
+                method=GRID_STATS_FEATURES[name],
+                p_active=args.p_active if uses_threshold else None,
+                per_trial_thresh=args.per_trial_thresh,
+                cache_dir=args.cache_dir,
+                abs_threshold=args.abs_threshold if uses_threshold else None,
+            )
+        )
+    return ConcatFeatures([zigzag, *extra])
 
 
 def main() -> int:
@@ -76,11 +125,20 @@ def main() -> int:
     problem_cfg = problem_config_from_args(args)
     train_cfg = TrainConfig.from_args(args)
     tag = thresh_tag(args.p_active, args.per_trial_thresh, args.abs_threshold)
+    unknown = [f for f in (args.add_features or []) if f not in GRID_STATS_FEATURES]
+    if unknown:
+        print(f"Unknown --add-features {unknown}; choose from {list(GRID_STATS_FEATURES)}", file=sys.stderr)
+        return 2
+    feature_label = args.vectorization
+    if args.blocks is not None:
+        feature_label += "-H" + "".join(str(b) for b in args.blocks)
+    for f in args.add_features or []:
+        feature_label += "+" + f.replace("_", "-")
 
     run_dir = args.output_dir or (
         results_base(args)
         / "zigzag"
-        / args.vectorization
+        / feature_label
         / args.model
         / tag
         / f"{args.target}_{args.scope}"
@@ -99,26 +157,21 @@ def main() -> int:
         problem_cfg=problem_cfg,
         train_cfg=train_cfg,
         run_dir=run_dir,
-        make_features=lambda: ZigzagFeatures(
-            data_root=args.data_root,
-            method=args.vectorization,
-            p_active=args.p_active,
-            per_trial_thresh=args.per_trial_thresh,
-            cache_dir=args.cache_dir,
-            abs_threshold=args.abs_threshold,
-        ),
+        make_features=lambda: make_features(args),
         context={
             "grid_type": grid_type(args),
             "target": args.target,
             "scope": args.scope,
             "input": "zigzag",
-            "vectorization": args.vectorization,
+            "vectorization": feature_label,
             "model": args.model,
             "p_active": args.p_active,
             "thresh_mode": thresh_mode(args.per_trial_thresh, args.abs_threshold),
             "abs_threshold": args.abs_threshold,
+            "blocks": "" if args.blocks is None else "|".join(str(b) for b in args.blocks),
+            "added_features": "|".join(args.add_features or []),
         },
-        title=f"{args.target} {args.scope} | zigzag {args.vectorization} {tag} | {MODEL_TITLES[args.model]}",
+        title=f"{args.target} {args.scope} | zigzag {feature_label} {tag} | {MODEL_TITLES[args.model]}",
     )
 
 

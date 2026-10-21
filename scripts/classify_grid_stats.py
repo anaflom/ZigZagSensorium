@@ -49,18 +49,12 @@ from classification_engine import (
     thresh_mode,
     thresh_tag,
 )
-from classification_features import CachedFeatures
+from classification_features import GRID_STATS_FEATURES, CachedFeatures
 from classify_zigzag import add_repeat_args
 from utils import FRAME_ALIGNED_BLOCKS, _opt_int, _str2bool
 
 
-FEATURE_METHODS = {
-    "moments_raw": "GridMomentsRaw",  # mean, CV, skewness
-    "moments_density": "GridMomentsDensity",
-    "moments_std": "GridMomentsStd",  # mean, std, skewness (for zero-mean grids)
-    "moments_std_density": "GridMomentsStdDensity",
-    "active_fraction": "ActiveFraction",
-}
+FEATURE_METHODS = GRID_STATS_FEATURES
 
 
 def time_average(method: str):

@@ -21,6 +21,7 @@ import numpy as np
 import pandas as pd
 
 from utils import (
+    FRAME_ALIGNED_BLOCKS,
     build_shuffled_grid_cache_path,
     build_vectorization_cache_stem,
     is_frame_aligned_method,
@@ -30,6 +31,15 @@ from utils import (
 
 
 SHUFFLE_TYPES: Tuple[str, ...] = ("time", "spatial", "phase")
+
+# Grid-statistics feature sets (compute_grid_stats_cache.py) by command-line name.
+GRID_STATS_FEATURES: Dict[str, str] = {
+    "moments_raw": "GridMomentsRaw",  # mean, CV, skewness
+    "moments_density": "GridMomentsDensity",
+    "moments_std": "GridMomentsStd",  # mean, std, skewness (for zero-mean grids)
+    "moments_std_density": "GridMomentsStdDensity",
+    "active_fraction": "ActiveFraction",  # depends on the zigzag threshold
+}
 
 
 def shuffle_mode_token(different_shuffle_per_trial: bool) -> str:
@@ -68,6 +78,8 @@ class CachedFeatures:
     cache_dir: Optional[Path] = None
     stem_suffix: str = ""
     abs_threshold: Optional[float] = None
+    # Keep only these frame-aligned blocks (e.g. [1] = H1 of Turnover); None = all.
+    blocks: Optional[List[int]] = None
     _cache: Dict[Tuple[str, Optional[int]], Dict[str, Any]] = field(default_factory=dict, repr=False)
     sources: Dict[str, Dict[str, Any]] = field(default_factory=dict, repr=False)
 
@@ -127,7 +139,37 @@ class CachedFeatures:
         out = np.empty((len(samples), parts[0].shape[1]), dtype=np.float64)
         for idx, x in zip(order, parts):
             out[idx] = x
+        if self.blocks is not None:
+            out = select_blocks(out, self.method, self.blocks)
         return out
+
+
+def select_blocks(x: np.ndarray, method: str, blocks: Sequence[int]) -> np.ndarray:
+    """Keep the given frame-aligned blocks of a feature matrix (e.g. H1 of Turnover)."""
+    if not is_frame_aligned_method(method):
+        raise ValueError(f"Block selection needs a frame-aligned method; got '{method}'")
+    n_blocks = FRAME_ALIGNED_BLOCKS[method]
+    bad = [b for b in blocks if not 0 <= int(b) < n_blocks]
+    if bad:
+        raise ValueError(f"{method} has blocks 0..{n_blocks - 1}; got {bad}")
+    return x.reshape(x.shape[0], n_blocks, -1)[:, [int(b) for b in blocks], :].reshape(x.shape[0], -1)
+
+
+@dataclass
+class ConcatFeatures:
+    """Concatenate the features of several sources (e.g. Turnover + active fraction)."""
+
+    parts: List[Any]
+
+    @property
+    def sources(self) -> Dict[str, Dict[str, Any]]:
+        out: Dict[str, Dict[str, Any]] = {}
+        for p in self.parts:
+            out.update({f"{p.method}|{k}": v for k, v in p.sources.items()})
+        return out
+
+    def features(self, samples: pd.DataFrame) -> np.ndarray:
+        return np.concatenate([p.features(samples) for p in self.parts], axis=1)
 
 
 # Kept for readability at call sites that read zigzag vectorizations.
