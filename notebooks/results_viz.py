@@ -297,7 +297,8 @@ def plot_overview(pp: pd.DataFrame, grid: str, value: str = "score") -> Optional
         return None
     order = feature_order(d)
     # Each panel has its own y-range: scores differ a lot between schemes.
-    fig, axes = plt.subplots(3, 2, figsize=(13, 11))
+    # Width grows with the number of feature sets (e.g. 8 thresholds on the trial-mean grid).
+    fig, axes = plt.subplots(3, 2, figsize=(max(13.0, 0.8 * len(order) + 4), 11))
     rng = np.random.default_rng(0)
     for ax, scheme in zip(axes.ravel(), SCHEMES):
         sd = d[(d["target"] == scheme[0]) & (d["scope"] == scheme[1])]
