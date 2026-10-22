@@ -19,6 +19,8 @@ DERIV="/orfeo/scratch/area/ygardinazzi/sensorium_2026/derivatives"
 MINMAX="${DERIV}/grid-15x15x10_norm-by_minmax"
 TRIALMEAN="${DERIV}/grid-15x15x10_norm-by_trialmean"
 RUN_NAME="${RUN_NAME:-$(date +%Y%m%d_%H%M%S)}"
+# Zigzag arrays over the 10 mice, at most 3 tasks (32 CPUs each) running per array at a time
+ZZ_ARRAY="${ZZ_ARRAY:-0-9%3}"
 export DRY_RUN="${DRY_RUN:-false}"
 N=0
 FAKE_COUNTER=$(mktemp)  # dry-run job ids (a file, because submit runs inside $(...))
@@ -43,7 +45,7 @@ for spec in "minmax p90" "trialmean p90" "trialmean pf50" "trialmean pf70" "tria
   read -r grid thr <<< "${spec}"
   root=$([[ "${grid}" == minmax ]] && echo "${MINMAX}" || echo "${TRIALMEAN}")
   if [[ "${thr}" == pf* ]]; then p="${thr#pf}"; pf=true; else p="${thr#p}"; pf=false; fi
-  ZZ[${grid}_${thr}]=$(DATA_ROOT="${root}" P_ACTIVE="${p}" PER_FRAME="${pf}" THRESHOLD= submit scripts/compute_zigzag.sh)
+  ZZ[${grid}_${thr}]=$(DATA_ROOT="${root}" P_ACTIVE="${p}" PER_FRAME="${pf}" THRESHOLD= submit --array="${ZZ_ARRAY}" scripts/compute_zigzag.sh)
   VEC[${grid}_${thr}]=$(DATA_ROOT="${root}" P_ACTIVE="${p}" PER_FRAME_THRESH="${pf}" ABS_THRESHOLD= CLIP_FRAMES=None \
     submit $(dep "${ZZ[${grid}_${thr}]}") scripts/compute_vectorization_cache.sh)
 done
