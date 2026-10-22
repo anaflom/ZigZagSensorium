@@ -96,20 +96,32 @@ def compute_threshold_from_sample(
     return float(np.mean(thresholds))
 
 
+def subtract_frame_percentile(data: np.ndarray, p_active: float) -> np.ndarray:
+    """Subtract each frame's ``p_active`` percentile (over all cells) from that frame.
+
+    Thresholding the result at 0 keeps, at every frame, the cells above that
+    frame's percentile: the same fraction of active cells in every frame
+    (per-frame threshold), so the overall activity level cannot change the
+    size of the active set.
+    """
+    q = np.percentile(data.reshape(-1, data.shape[-1]), p_active, axis=0)
+    return data - q
+
+
 def process_single_trial(args):
     """Process a single trial file. Designed for multiprocessing.
 
     Parameters
     ----------
     args : tuple
-        (trial_path, output_path, threshold, p_active, max_dim)
+        (trial_path, output_path, threshold, p_active, max_dim, per_frame)
 
     Returns
     -------
     dict
         Result info: trial name, number of bars, elapsed time, success flag.
     """
-    trial_path, output_path, threshold, p_active, max_dim = args
+    trial_path, output_path, threshold, p_active, max_dim, per_frame = args
     trial_name = os.path.basename(trial_path)
 
     try:
@@ -120,7 +132,10 @@ def process_single_trial(args):
         data = np.load(trial_path)
         assert data.ndim == 4, f"Expected 4D array, got shape {data.shape}"
 
-        if threshold is None:
+        if per_frame:
+            data = subtract_frame_percentile(data, p_active)
+            threshold = 0.0
+        elif threshold is None:
             threshold = compute_threshold(data, p_active)
 
         bars = run_cubical_zigzag(data, threshold=threshold)
@@ -171,6 +186,13 @@ def main():
         type=str_to_bool,
         default=True,
         help="Whether to compute p_active per trial (default: True).",
+    )
+    parser.add_argument(
+        "--per-frame",
+        type=str_to_bool,
+        default=False,
+        help="Threshold each frame at its own p_active percentile over all cells "
+             "(same fraction of active cells in every frame). Output: trials_zz-thresh-<P>-per-frame/",
     )
     parser.add_argument(
         "--threshold",
@@ -227,7 +249,11 @@ def main():
 
     # Compute or use provided threshold
     p_active = args.p_active
-    if args.threshold is not None:
+    if args.per_frame:
+        threshold = None
+        abs_threshold = False
+        logger.info(f"Per-frame threshold: each frame keeps the cells above its {p_active} percentile")
+    elif args.threshold is not None:
         threshold = args.threshold
         abs_threshold = True
         logger.info(f"Using provided threshold: {threshold}")
@@ -254,7 +280,9 @@ def main():
         thresh_str = f"abs-{threshold:.8f}".rstrip("0").rstrip(".")
     else:
         thresh_str = f"{int(p_active)}" if p_active == int(p_active) else f"{p_active}"
-        if args.p_active_per_trial:
+        if args.per_frame:
+            thresh_str += "-per-frame"
+        elif args.p_active_per_trial:
             thresh_str += "-per-trial"
 
     # Set up output directory
@@ -277,7 +305,7 @@ def main():
             skipped += 1
             continue
 
-        tasks.append((str(trial_file), str(out_path), threshold, p_active, args.max_dim))
+        tasks.append((str(trial_file), str(out_path), threshold, p_active, args.max_dim, args.per_frame))
 
     if skipped > 0:
         logger.info(f"Skipping {skipped} trials with existing output files.")
@@ -345,6 +373,9 @@ def main():
     }
     if abs_threshold:
         info["threshold"] = threshold
+    elif args.per_frame:
+        info["p_active"] = p_active
+        info["threshold_mode"] = "per-frame (each frame at its own percentile over all cells; threshold 0 after subtraction)"
     else:
         info["p_active"] = p_active
         if not args.p_active_per_trial:

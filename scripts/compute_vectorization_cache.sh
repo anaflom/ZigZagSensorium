@@ -36,6 +36,7 @@ VECTORIZATION_METHOD="${VECTORIZATION_METHOD:-Turnover}"
 P_ACTIVE="${P_ACTIVE:-50}"
 PER_TRIAL_THRESH="${PER_TRIAL_THRESH:-true}"
 ABS_THRESHOLD="${ABS_THRESHOLD:-}"  # fixed zigzag threshold (e.g. 0) instead of P_ACTIVE
+PER_FRAME_THRESH="${PER_FRAME_THRESH:-false}"  # true: zigzag thresholded per frame (trials_zz-thresh-<P>-per-frame)
 CLIP_FRAMES="${CLIP_FRAMES:-None}"
 
 NUM_WORKERS="${NUM_WORKERS:-32}"
@@ -67,6 +68,7 @@ CMD=(
   --meta-root "${META_ROOT}"
   --vectorization-method "${VECTORIZATION_METHOD}"
   --per-trial-thresh "${PER_TRIAL_THRESH}"
+  --per-frame-thresh "${PER_FRAME_THRESH}"
   --clip-frames "${CLIP_FRAMES}"
   --num-workers "${NUM_WORKERS}"
   --progress-every "${PROGRESS_EVERY}"

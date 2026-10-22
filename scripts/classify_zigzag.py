@@ -68,6 +68,12 @@ def build_parser() -> argparse.ArgumentParser:
     g.add_argument("--p-active", default=None, type=int)
     g.add_argument("--per-trial-thresh", default=True, type=_str2bool)
     g.add_argument("--abs-threshold", default=None, type=float, help="Fixed zigzag threshold instead of --p-active")
+    g.add_argument(
+        "--per-frame-thresh",
+        default=False,
+        type=_str2bool,
+        help="Zigzag thresholded per frame at its own P_ACTIVE percentile (trials_zz-thresh-<P>-per-frame)",
+    )
     g.add_argument("--cache-dir", default=None, type=Path, help="Default: <data-root>/<mouse>/cache")
     g.add_argument(
         "--blocks",
@@ -97,6 +103,7 @@ def make_features(args: argparse.Namespace):
         per_trial_thresh=args.per_trial_thresh,
         cache_dir=args.cache_dir,
         abs_threshold=args.abs_threshold,
+        per_frame=args.per_frame_thresh,
         blocks=args.blocks,
     )
     if not args.add_features:
@@ -122,9 +129,12 @@ def main() -> int:
     if (args.p_active is None) == (args.abs_threshold is None):
         print("Give exactly one of --p-active or --abs-threshold", file=sys.stderr)
         return 2
+    if args.per_frame_thresh and "active_fraction" in (args.add_features or []):
+        print("active_fraction is constant with a per-frame threshold; add moments instead", file=sys.stderr)
+        return 2
     problem_cfg = problem_config_from_args(args)
     train_cfg = TrainConfig.from_args(args)
-    tag = thresh_tag(args.p_active, args.per_trial_thresh, args.abs_threshold)
+    tag = thresh_tag(args.p_active, args.per_trial_thresh, args.abs_threshold, args.per_frame_thresh)
     unknown = [f for f in (args.add_features or []) if f not in GRID_STATS_FEATURES]
     if unknown:
         print(f"Unknown --add-features {unknown}; choose from {list(GRID_STATS_FEATURES)}", file=sys.stderr)
@@ -166,7 +176,7 @@ def main() -> int:
             "vectorization": feature_label,
             "model": args.model,
             "p_active": args.p_active,
-            "thresh_mode": thresh_mode(args.per_trial_thresh, args.abs_threshold),
+            "thresh_mode": thresh_mode(args.per_trial_thresh, args.abs_threshold, args.per_frame_thresh),
             "abs_threshold": args.abs_threshold,
             "blocks": "" if args.blocks is None else "|".join(str(b) for b in args.blocks),
             "added_features": "|".join(args.add_features or []),

@@ -47,6 +47,7 @@ VECTORIZATION="${VECTORIZATION:-Turnover}"
 P_ACTIVE="${P_ACTIVE:-30}"
 PER_TRIAL_THRESH="${PER_TRIAL_THRESH:-true}"
 ABS_THRESHOLD="${ABS_THRESHOLD:-}"  # fixed zigzag threshold (e.g. 0) instead of P_ACTIVE
+PER_FRAME_THRESH="${PER_FRAME_THRESH:-false}"  # true: zigzag thresholded per frame (trials_zz-thresh-<P>-per-frame)
 CACHE_DIR="${CACHE_DIR:-}"
 
 # Model and repeats (repeats only matter for neural models)
@@ -77,6 +78,7 @@ CMD=(
   --meta-root "${META_ROOT}"
   --vectorization "${VECTORIZATION}"
   --per-trial-thresh "${PER_TRIAL_THRESH}"
+  --per-frame-thresh "${PER_FRAME_THRESH}"
   --model "${MODEL}"
   --n-repeats "${N_REPEATS}"
   --init-seed "${INIT_SEED}"

@@ -56,6 +56,8 @@ def _build_parser() -> argparse.ArgumentParser:
     p.add_argument("--vectorization-method", type=str, required=True)
     p.add_argument("--p-active", type=int, default=None)
     p.add_argument("--per-trial-thresh", type=_str2bool, default=True)
+    p.add_argument("--per-frame-thresh", type=_str2bool, default=False,
+                   help="Zigzag thresholded per frame (reads trials_zz-thresh-<P>-per-frame/)")
     p.add_argument("--abs-threshold", type=float, default=None,
                    help="Fixed zigzag threshold (reads trials_zz-thresh-abs-<T>/) instead of --p-active")
     p.add_argument("--clip-frames", type=_opt_int, default=None,
@@ -253,7 +255,7 @@ def main() -> int:
     if (args.p_active is None) == (args.abs_threshold is None):
         print("ERROR: give exactly one of --p-active or --abs-threshold", file=sys.stderr)
         return 2
-    zz_folder = _build_zz_folder(args.p_active, args.per_trial_thresh, args.abs_threshold)
+    zz_folder = _build_zz_folder(args.p_active, args.per_trial_thresh, args.abs_threshold, args.per_frame_thresh)
 
     print("=" * 90, flush=True)
     print("Generate Vectorization Cache", flush=True)
@@ -264,6 +266,7 @@ def main() -> int:
     print(f"method             : {args.vectorization_method}", flush=True)
     print(f"p_active           : {args.p_active}", flush=True)
     print(f"abs_threshold      : {args.abs_threshold}", flush=True)
+    print(f"per_frame_thresh   : {args.per_frame_thresh}", flush=True)
     print(f"per_trial_thresh   : {args.per_trial_thresh}", flush=True)
     print(f"clip_frames        : {args.clip_frames}", flush=True)
     print(f"max_trials         : {args.max_trials}", flush=True)
@@ -330,6 +333,7 @@ def main() -> int:
                 per_trial_thresh=args.per_trial_thresh,
                 clip_frames=clip_for_key,
                 abs_threshold=args.abs_threshold,
+                per_frame=args.per_frame_thresh,
             )
             cache_path = cache_dir_mouse / f"{cache_stem}.npz"
 

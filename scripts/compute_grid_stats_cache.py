@@ -240,7 +240,7 @@ def process_mouse(args: argparse.Namespace, mouse: str) -> None:
                 print(f"    {n_done}/{len(jobs)} trials ({time.time() - t0:.0f}s)", flush=True)
 
     common = {"min_density": args.min_density, "n_cells_density": int(mask.sum()), "num_grid": np.asarray(num_grid)}
-    for method, names in MOMENT_SETS.items():
+    for method, names in ({} if args.skip_moments else MOMENT_SETS).items():
         path = cache_dir / f"{build_vectorization_cache_stem(mouse, method, None, False, None)}.npz"
         _save(path, [r[method] for r in results], trials, method, {**common, "feature_names": names})
         print(f"    saved {path.name}", flush=True)
@@ -282,6 +282,12 @@ def build_parser() -> argparse.ArgumentParser:
         help="Comma-separated fixed zigzag thresholds for ActiveFraction (e.g. 0)",
     )
     p.add_argument("--num-workers", default=8, type=int)
+    p.add_argument(
+        "--skip-moments",
+        default=False,
+        type=_str2bool,
+        help="Only write ActiveFraction caches (moment caches already exist and may be in use)",
+    )
     return p
 
 

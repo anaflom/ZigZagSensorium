@@ -66,10 +66,17 @@ def abs_threshold_token(threshold: float) -> str:
     return f"abs-{float(threshold):.8f}".rstrip("0").rstrip(".")
 
 
-def _build_zz_folder(p_active: Optional[int], per_trial_thresh: bool, abs_threshold: Optional[float] = None) -> str:
-    """Build zigzag folder name from threshold options (fixed threshold if abs_threshold is given)."""
+def _build_zz_folder(
+    p_active: Optional[int], per_trial_thresh: bool, abs_threshold: Optional[float] = None, per_frame: bool = False
+) -> str:
+    """Build zigzag folder name from threshold options.
+
+    abs_threshold: fixed threshold; per_frame: each frame at its own P_ACTIVE percentile.
+    """
     if abs_threshold is not None:
         return f"trials_zz-thresh-{abs_threshold_token(abs_threshold)}"
+    if per_frame:
+        return f"trials_zz-thresh-{p_active}-per-frame"
     if per_trial_thresh:
         return f"trials_zz-thresh-{p_active}-per-trial"
     return f"trials_zz-thresh-{p_active}"
@@ -320,6 +327,7 @@ def build_vectorization_cache_stem(
     per_trial_thresh: bool,
     clip_frames: Optional[int],
     abs_threshold: Optional[float] = None,
+    per_frame: bool = False,
 ) -> str:
     """Build a deterministic cache stem for vectorized features.
 
@@ -333,6 +341,8 @@ def build_vectorization_cache_stem(
         return f"{mouse_name}_{method_safe}_{abs_threshold_token(abs_threshold).replace('-', '', 1)}_clip{clip_part}"
     if p_active is None:
         return f"{mouse_name}_{method_safe}_clip{clip_part}"
+    if per_frame:
+        return f"{mouse_name}_{method_safe}_p{int(p_active)}_perframe_clip{clip_part}"
     per_trial_part = "pertrial1" if per_trial_thresh else "pertrial0"
     return f"{mouse_name}_{method_safe}_p{int(p_active)}_{per_trial_part}_clip{clip_part}"
 
@@ -417,6 +427,7 @@ def load_feature_cache(
     cache_dir: Optional[Path] = None,
     stem_suffix: str = "",
     abs_threshold: Optional[float] = None,
+    per_frame: bool = False,
 ) -> Dict[str, Any]:
     """Load a vectorization cache for one mouse, clipped to ``clip_frames``.
 
@@ -433,7 +444,7 @@ def load_feature_cache(
     mouse_cache_dir = Path(cache_dir) if cache_dir is not None else Path(data_root) / mouse_name / "cache"
 
     def _path_for(clip: Optional[int]) -> Path:
-        stem = build_vectorization_cache_stem(mouse_name, method, p_active, per_trial_thresh, clip, abs_threshold)
+        stem = build_vectorization_cache_stem(mouse_name, method, p_active, per_trial_thresh, clip, abs_threshold, per_frame)
         return mouse_cache_dir / f"{stem}{stem_suffix}.npz"
 
     def _read(path: Path) -> Tuple[np.ndarray, np.ndarray]:
@@ -480,6 +491,7 @@ def load_feature_cache(
             per_trial_thresh=per_trial_thresh,
             clip_frames=clip_used,
             abs_threshold=abs_threshold,
+            per_frame=per_frame,
         )
     )
 
@@ -653,13 +665,15 @@ def _build_vectorization_precompute_hint(
     per_trial_thresh: bool,
     clip_frames: Optional[int],
     abs_threshold: Optional[float] = None,
+    per_frame: bool = False,
 ) -> str:
     clip_token = "None" if clip_frames is None else str(int(clip_frames))
-    thresh_args = (
-        f"--abs-threshold {abs_threshold} "
-        if abs_threshold is not None
-        else f"--p-active {int(p_active)} --per-trial-thresh {'true' if per_trial_thresh else 'false'} "
-    )
+    if abs_threshold is not None:
+        thresh_args = f"--abs-threshold {abs_threshold} "
+    elif per_frame:
+        thresh_args = f"--p-active {int(p_active)} --per-frame-thresh true "
+    else:
+        thresh_args = f"--p-active {int(p_active)} --per-trial-thresh {'true' if per_trial_thresh else 'false'} "
     if method in GRID_STATS_METHODS:
         return (
             "Compute it first with: python3 scripts/compute_grid_stats_cache.py "

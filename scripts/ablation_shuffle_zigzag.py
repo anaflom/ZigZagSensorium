@@ -124,7 +124,7 @@ def main() -> int:
         return 1
     shuffle_ids = resolve_shuffle_ids(args, source, problems.mice_used)
     print(f"Shuffle IDs: {shuffle_ids}")
-    device = configure_torch(train_cfg) if args.model != "logreg" else None
+    device = configure_torch(train_cfg) if args.model not in ("logreg", "logreg_cv") else None
 
     for shuffle_id in shuffle_ids:
         out_dir = run_dir / f"shuffle-{shuffle_id:04d}"
@@ -166,7 +166,7 @@ def main() -> int:
                 }
 
                 def make_config():
-                    config = base_config(args, problem_cfg, train_cfg if args.model != "logreg" else None)
+                    config = base_config(args, problem_cfg, train_cfg if args.model not in ("logreg", "logreg_cv") else None)
                     config.update(
                         {
                             "context": context,

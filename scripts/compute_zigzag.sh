@@ -44,6 +44,9 @@ P_ACTIVE_PER_TRIAL="${P_ACTIVE_PER_TRIAL:-True}"
 # Fixed threshold instead of a percentile (e.g. THRESHOLD=0: grid value > 0 is active;
 # zz-top convention: cells active when -value < threshold). Output: trials_zz-thresh-abs-<T>/
 THRESHOLD="${THRESHOLD:-}"
+# PER_FRAME=true: each frame thresholded at its own P_ACTIVE percentile over all cells
+# (output: trials_zz-thresh-<P>-per-frame/)
+PER_FRAME="${PER_FRAME:-false}"
 THRESHOLD_ARGS=()
 if [[ -n "${THRESHOLD}" ]]; then
   THRESHOLD_ARGS=(--threshold "${THRESHOLD}")
@@ -73,6 +76,7 @@ echo "Mouse: ${MOUSE_NAME}"
 echo "p_active: ${P_ACTIVE}"
 echo "p_active_per_trial: ${P_ACTIVE_PER_TRIAL}"
 echo "threshold (fixed): ${THRESHOLD:-<none>}"
+echo "per-frame threshold: ${PER_FRAME}"
 echo "data root: ${DATA_ROOT}"
 echo "Workers: ${N_WORKERS}"
 echo "Node: $(hostname)"
@@ -103,6 +107,7 @@ python3 -u "${SCRIPT}" \
     --n-threshold-samples 20 \
     --max-dim 2 \
     "${THRESHOLD_ARGS[@]}" \
+    --per-frame "${PER_FRAME}" \
     --skip-existing
 
 EXIT_CODE=$?

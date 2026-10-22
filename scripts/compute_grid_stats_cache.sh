@@ -39,6 +39,7 @@ P_ACTIVE="${P_ACTIVE:-30,50,70}"
 PER_TRIAL_THRESH="${PER_TRIAL_THRESH:-true}"
 ABS_THRESHOLDS="${ABS_THRESHOLDS:-}"  # e.g. 0 (fixed zigzag thresholds for ActiveFraction)
 NUM_WORKERS="${NUM_WORKERS:-32}"
+SKIP_MOMENTS="${SKIP_MOMENTS:-false}"  # true: only write ActiveFraction caches
 
 mkdir -p "${PROJECT_DIR}/logs"
 source "${VENV_DIR}/bin/activate"
@@ -53,6 +54,7 @@ CMD=(
   --per-trial-thresh "${PER_TRIAL_THRESH}"
   --abs-thresholds "${ABS_THRESHOLDS}"
   --num-workers "${NUM_WORKERS}"
+  --skip-moments "${SKIP_MOMENTS}"
 )
 [[ "${MICE}" != "None" && -n "${MICE}" ]] && CMD+=(--mice "${MICE}")
 [[ -n "${CACHE_DIR}" ]] && CMD+=(--cache-dir "${CACHE_DIR}")

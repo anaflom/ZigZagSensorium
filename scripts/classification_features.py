@@ -78,6 +78,7 @@ class CachedFeatures:
     cache_dir: Optional[Path] = None
     stem_suffix: str = ""
     abs_threshold: Optional[float] = None
+    per_frame: bool = False
     # Keep only these frame-aligned blocks (e.g. [1] = H1 of Turnover); None = all.
     blocks: Optional[List[int]] = None
     _cache: Dict[Tuple[str, Optional[int]], Dict[str, Any]] = field(default_factory=dict, repr=False)
@@ -96,6 +97,7 @@ class CachedFeatures:
                 cache_dir=self.cache_dir,
                 stem_suffix=self.stem_suffix,
                 abs_threshold=self.abs_threshold,
+                per_frame=self.per_frame,
             )
             loaded["row_of_trial"] = {int(t): i for i, t in enumerate(loaded["trial_ids"])}
             self._cache[key] = loaded

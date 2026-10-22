@@ -56,10 +56,14 @@ from utils import _opt_csv_list, _opt_int, _str2bool
 PROJECT_DIR = Path(__file__).resolve().parents[1]
 DEFAULT_RESULTS_ROOT = PROJECT_DIR / "results"
 
-VECTOR_MODELS: Tuple[str, ...] = ("logreg", "mlp", "cnn1d")
+VECTOR_MODELS: Tuple[str, ...] = ("logreg", "logreg_cv", "mlp", "cnn1d")
+# logreg_cv: regularization strength chosen per training set by inner grouped CV.
+LOGREG_CV_CS: Tuple[float, ...] = (1e-3, 1e-2, 1e-1, 1.0, 10.0)
+LOGREG_CV_INNER_FOLDS = 3
 GRID_MODELS: Tuple[str, ...] = ("cnn3d_raw", "cnn3d_norm")
 MODEL_TITLES = {
     "logreg": "LogReg",
+    "logreg_cv": "LogReg (tuned C)",
     "mlp": "MLP",
     "cnn1d": "1D-CNN",
     "cnn3d_raw": "3D-CNN (raw grid)",
@@ -231,6 +235,58 @@ def _constant_prediction(y_train: np.ndarray, n: int) -> np.ndarray:
     return np.full(n, int(values[np.argmax(counts)]), dtype=np.int64)
 
 
+def _n_jobs() -> int:
+    try:
+        return max(1, len(os.sched_getaffinity(0)))
+    except AttributeError:
+        return 1
+
+
+def fit_predict_logreg_cv(
+    x_tr: np.ndarray, y_tr: np.ndarray, x_te: np.ndarray, groups_tr: Optional[np.ndarray], seed: int
+) -> np.ndarray:
+    """Logistic regression with C chosen by inner cross-validation on the training data only.
+
+    Inner folds are stratified by class and grouped by trial (segments of one
+    trial never sit on both sides of an inner split); balanced accuracy picks
+    C from LOGREG_CV_CS.  With too few samples per class for an inner CV,
+    C = 1 (the fixed-C logreg) is used.
+    """
+    import warnings
+
+    from sklearn.linear_model import LogisticRegression
+    from sklearn.model_selection import GridSearchCV, StratifiedGroupKFold
+    from sklearn.pipeline import Pipeline
+    from sklearn.preprocessing import StandardScaler
+
+    def pipe(c: float = 1.0) -> Pipeline:
+        return Pipeline(
+            [
+                ("scaler", StandardScaler()),
+                ("clf", LogisticRegression(C=c, max_iter=2000, random_state=42, class_weight="balanced")),
+            ]
+        )
+
+    groups = np.arange(len(y_tr)) if groups_tr is None else np.asarray(groups_tr)
+    counts = np.bincount(y_tr)
+    min_count = int(counts[counts > 0].min())
+    n_inner = min(LOGREG_CV_INNER_FOLDS, min_count, len(np.unique(groups)))
+    if n_inner < 2:
+        return pipe().fit(x_tr, y_tr).predict(x_te).astype(np.int64)
+    search = GridSearchCV(
+        pipe(),
+        {"clf__C": list(LOGREG_CV_CS)},
+        cv=StratifiedGroupKFold(n_splits=n_inner, shuffle=True, random_state=seed % (2**31)),
+        scoring="balanced_accuracy",
+        n_jobs=_n_jobs(),
+        refit=True,
+    )
+    with warnings.catch_warnings():
+        warnings.filterwarnings("ignore", category=UserWarning)
+        search.fit(x_tr, y_tr, groups=groups)
+    return np.asarray(search.predict(x_te), dtype=np.int64)
+
+
 def fit_predict_vector(
     model: str,
     x: np.ndarray,
@@ -243,8 +299,13 @@ def fit_predict_vector(
     seed: int,
     train_cfg: TrainConfig,
     device: Any,
+    groups: Optional[np.ndarray] = None,
 ) -> np.ndarray:
-    """Train ``model`` on vector features ``x[train_idx]`` and predict ``x[test_idx]``."""
+    """Train ``model`` on vector features ``x[train_idx]`` and predict ``x[test_idx]``.
+
+    ``groups`` (one per sample, e.g. trial IDs) keeps related samples together
+    in the inner cross-validation of ``logreg_cv``.
+    """
     from sklearn.preprocessing import StandardScaler
 
     from classification_models import CNN1D, MLP, VectorDataset, infer_cnn1d_shape, train_eval_logreg, train_eval_nn
@@ -254,6 +315,9 @@ def fit_predict_vector(
     if model == "logreg":
         _m, pred = train_eval_logreg(x_tr, y_tr, x_te, y_te)
         return np.asarray(pred, dtype=np.int64)
+    if model == "logreg_cv":
+        g = None if groups is None else np.asarray(groups)[train_idx]
+        return fit_predict_logreg_cv(x_tr, y_tr, x_te, g, seed)
 
     scaler = StandardScaler().fit(x_tr)
     x_tr = scaler.transform(x_tr)
@@ -445,18 +509,24 @@ def results_base(args: argparse.Namespace) -> Path:
     return Path(args.results_root) / grid_type(args)
 
 
-def thresh_tag(p_active: Optional[int], per_trial_thresh: bool, abs_threshold: Optional[float] = None) -> str:
-    """Results folder level for the zigzag threshold: p30-per-trial, p30-global or abs-0."""
+def thresh_tag(
+    p_active: Optional[int], per_trial_thresh: bool, abs_threshold: Optional[float] = None, per_frame: bool = False
+) -> str:
+    """Results folder level for the zigzag threshold: p30-per-trial, p30-global, p30-per-frame or abs-0."""
     if abs_threshold is not None:
         from utils import abs_threshold_token
 
         return abs_threshold_token(abs_threshold)
+    if per_frame:
+        return f"p{int(p_active)}-per-frame"
     return f"p{int(p_active)}-{'per-trial' if per_trial_thresh else 'global'}"
 
 
-def thresh_mode(per_trial_thresh: bool, abs_threshold: Optional[float] = None) -> str:
+def thresh_mode(per_trial_thresh: bool, abs_threshold: Optional[float] = None, per_frame: bool = False) -> str:
     if abs_threshold is not None:
         return "abs"
+    if per_frame:
+        return "per-frame"
     return "per-trial" if per_trial_thresh else "global"
 
 
@@ -626,7 +696,7 @@ def run_vector_classification(
     """
     import traceback
 
-    device = configure_torch(train_cfg) if args.model != "logreg" else None
+    device = configure_torch(train_cfg) if args.model not in ("logreg", "logreg_cv") else None
     for repeat in range(args.repeat_start, args.repeat_start + args.n_repeats):
         out_dir = run_dir / f"repeat-{repeat:02d}"
         out_dir.mkdir(parents=True, exist_ok=True)
@@ -642,6 +712,7 @@ def run_vector_classification(
                     x = features.features(unit.samples)
                     if transform is not None:
                         x = transform(x, unit)
+                    trial_groups = unit.samples["trial_id"].to_numpy()
                     return lambda tr, te, seed: fit_predict_vector(
                         args.model,
                         x,
@@ -653,12 +724,13 @@ def run_vector_classification(
                         seed=seed,
                         train_cfg=train_cfg,
                         device=device,
+                        groups=trial_groups,
                     )
 
                 ctx = {**context, "repeat": repeat, "init_seed": init_seed, "split_seed": args.split_seed}
 
                 def make_config() -> Dict[str, Any]:
-                    config = base_config(args, problem_cfg, train_cfg if args.model != "logreg" else None)
+                    config = base_config(args, problem_cfg, train_cfg if args.model not in ("logreg", "logreg_cv") else None)
                     config.update(
                         {
                             "context": ctx,
@@ -667,6 +739,9 @@ def run_vector_classification(
                             "feature_caches": features.sources,
                         }
                     )
+                    if args.model == "logreg_cv":
+                        config["logreg_cv"] = {"Cs": list(LOGREG_CV_CS), "inner_folds": LOGREG_CV_INNER_FOLDS,
+                                               "inner_cv": "StratifiedGroupKFold by trial", "scoring": "balanced_accuracy"}
                     return config
 
                 run_and_save(

@@ -7,6 +7,10 @@
 Every function works on whatever results exist: missing grids, thresholds,
 feature sets or schemes are skipped (with a note) rather than raising.
 
+Models: ``logreg`` (fixed regularization) and the 3D-CNN for the overview;
+``logreg_cv`` (regularization tuned by inner CV) for the incremental analysis.
+Thresholds: pXX per-trial P_ACTIVE, absT fixed threshold, pfXX per-frame P_ACTIVE.
+
 Score: chance-normalized balanced accuracy, (bacc - 1/K) / (1 - 1/K), with K the
 number of classes of the problem: 0 = chance, 1 = perfect.  One value per
 classification problem (mouse x label within mouse; held-out mouse or mouse pair
@@ -101,15 +105,19 @@ def _thr_label(row: pd.Series) -> str:
         t = row.get("abs_threshold")
         return f"abs{0 if pd.isna(t) else float(t):g}"
     p = row.get("p_active")
-    return "" if pd.isna(p) else f"p{int(p)}"
+    if pd.isna(p):
+        return ""
+    return f"pf{int(p)}" if row.get("thresh_mode") == "per-frame" else f"p{int(p)}"
 
 
 def _thr_sort_key(thr: str) -> tuple:
     if thr.startswith("abs"):
         return (0, float(thr[3:]))
+    if thr.startswith("pf"):
+        return (2, int(thr[2:]))
     if thr.startswith("p"):
         return (1, int(thr[1:]))
-    return (2, 0)
+    return (3, 0)
 
 
 def _feature_info(row: pd.Series) -> tuple:
@@ -119,6 +127,8 @@ def _feature_info(row: pd.Series) -> tuple:
     vec = str(row["vectorization"])
     if row["input"] == "zigzag":
         name = vec.replace("+active-fraction", " + AF")
+        for m in ("+moments-raw", "+moments-std"):
+            name = name.replace(m, " + moments")
         return name, "topology"
     # grid statistics
     trialavg = vec.endswith("-trialavg")
@@ -163,12 +173,21 @@ def load_all(include_partial: bool = False, results_root: Optional[Path] = None)
 
 def per_problem(df: pd.DataFrame, value: str = "score") -> pd.DataFrame:
     """One row per (grid, feature, threshold, scheme, problem); repeats averaged."""
-    keys = ["grid", "grid_type", "feature", "family", "thr", "label", "target", "scope", "unit_id", "mouse", "n_classes"]
+    keys = ["grid", "grid_type", "model", "feature", "family", "thr", "label", "target", "scope", "unit_id", "mouse",
+            "n_classes"]
     keys = [k for k in keys if k in df.columns]
     out = df.groupby(keys, dropna=False).agg(
         **{value: (value, "mean"), f"{value}_sd": (value, "std"), "n_repeats": (value, "size")}
     )
     return out.reset_index()
+
+
+MAIN_MODELS = ("logreg", "cnn3d_raw")  # overview / grid comparison
+TUNED_MODEL = "logreg_cv"  # incremental analysis
+
+
+def select_models(pp: pd.DataFrame, models: Sequence[str]) -> pd.DataFrame:
+    return pp[pp["model"].isin(list(models))] if len(pp) else pp
 
 
 def thresholds(df: pd.DataFrame) -> List[str]:
@@ -209,11 +228,11 @@ def coverage(df_all: pd.DataFrame) -> pd.DataFrame:
     d = df_all.copy()
     d["scheme_title"] = d["scheme"].map(SCHEME_TITLES)
     d["partial"] = (d["run_status"] != "complete") if "run_status" in d else False
-    agg = d.groupby(["grid", "family", "label", "scheme_title"]).agg(
+    agg = d.groupby(["grid", "model", "family", "label", "scheme_title"]).agg(
         problems=("unit_id", "nunique"), partial=("partial", "any")
     ).reset_index()
     agg["cell"] = agg["problems"].astype(str) + np.where(agg["partial"], " (partial)", "")
-    table = agg.pivot_table(index=["grid", "family", "label"], columns="scheme_title", values="cell", aggfunc="first")
+    table = agg.pivot_table(index=["grid", "model", "family", "label"], columns="scheme_title", values="cell", aggfunc="first")
     cols = [SCHEME_TITLES[s] for s in SCHEMES if SCHEME_TITLES[s] in table.columns]
     return table.reindex(columns=cols).fillna("—")
 
@@ -423,22 +442,48 @@ def wilcoxon_table(rows: pd.DataFrame, group_cols: Sequence[str]) -> pd.DataFram
 SUBSETS = [("Turnover", "all dims"), ("Turnover-H1", "H1"), ("Turnover-H2", "H2")]
 
 
+def control_of(thr: str) -> tuple:
+    """(control feature, control threshold) for a zigzag threshold.
+
+    Active fraction at the same threshold, except for per-frame thresholds,
+    where it is constant: there the control is the (threshold-free) moments.
+    """
+    return ("moments", "") if thr.startswith("pf") else ("AF", thr)
+
+
 def incremental_deltas(pp: pd.DataFrame) -> pd.DataFrame:
-    """Per problem: (topology subset + AF) - AF, and topology subset alone - AF."""
+    """Per problem: (topology subset + control) - control, and topology subset alone - control.
+
+    Use with ``logreg_cv`` results (``select_models(pp, [TUNED_MODEL])``).
+    """
+    if pp.empty:
+        return pd.DataFrame()
     rows = []
-    keys = ["grid", "thr", "target", "scope", "unit_id"]
-    for feat, subset in SUBSETS:
-        for kind, a_feat in (("topology + AF  vs  AF", f"{feat} + AF"), ("topology alone  vs  AF", feat)):
-            m = paired(pp, {"feature": a_feat, "family": "topology"}, {"feature": "AF", "family": "level"}, keys)
-            if m.empty:
-                continue
-            m = m[keys + ["delta", "score_a", "score_b"]].copy()
-            m["subset"], m["comparison"] = subset, kind
-            rows.append(m)
+    keys = ["grid", "target", "scope", "unit_id"]
+    for thr in thresholds(pp[pp["family"] == "topology"]):
+        ctrl, ctrl_thr = control_of(thr)
+        b = pp[(pp["feature"] == ctrl) & (pp["family"] == "level") & (pp["thr"] == ctrl_thr)]
+        if b.empty:
+            continue
+        for feat, subset in SUBSETS:
+            for kind, a_feat in (("topology + control  vs  control", f"{feat} + {ctrl}"),
+                                 ("topology alone  vs  control", feat)):
+                a = pp[(pp["feature"] == a_feat) & (pp["family"] == "topology") & (pp["thr"] == thr)]
+                if a.empty:
+                    continue
+                m = a.merge(b, on=keys, suffixes=("_a", "_b"))
+                if m.empty:
+                    continue
+                m["delta"] = m["score_a"] - m["score_b"]
+                m = m[keys + ["delta", "score_a", "score_b"]].copy()
+                m["thr"], m["subset"], m["comparison"], m["control"] = thr, subset, kind, ctrl
+                rows.append(m)
     return pd.concat(rows, ignore_index=True) if rows else pd.DataFrame()
 
 
-def plot_incremental(deltas: pd.DataFrame, grid: str, comparison: str = "topology + AF  vs  AF") -> Optional[plt.Figure]:
+def plot_incremental(
+    deltas: pd.DataFrame, grid: str, comparison: str = "topology + control  vs  control"
+) -> Optional[plt.Figure]:
     """Per scheme (rows) and threshold (columns): delta per topology subset."""
     d = deltas[(deltas["grid"] == grid) & (deltas["comparison"] == comparison)] if not deltas.empty else deltas
     if d.empty:
@@ -463,7 +508,7 @@ def plot_incremental(deltas: pd.DataFrame, grid: str, comparison: str = "topolog
             ax.set_xticklabels(subsets if r == len(SCHEMES) - 1 else [])
             ax.set_xlim(-0.6, len(subsets) - 0.2)
             if r == 0:
-                ax.set_title(thr)
+                ax.set_title(f"{thr}  (control: {control_of(thr)[0]})", fontsize=8.5)
             if c == 0:
                 ax.set_ylabel(SCHEME_TITLES[scheme].replace(", ", "\n"), fontsize=8)
     fig.suptitle(f"{comparison}: difference in {SCORE_LABEL}, {grid}\n(dots: problems; marker: mean ± s.e.m.; > 0: topology adds information)",
@@ -473,9 +518,12 @@ def plot_incremental(deltas: pd.DataFrame, grid: str, comparison: str = "topolog
 
 
 def plot_components(pp: pd.DataFrame, grid: str, thr: str) -> Optional[plt.Figure]:
-    """AF alone, topology alone and topology + AF, per scheme, for one grid and threshold."""
-    d = pp[(pp["grid"] == grid) & (pp["thr"] == thr)]
-    labs = ["AF", "Turnover", "Turnover + AF", "Turnover-H1", "Turnover-H1 + AF", "Turnover-H2", "Turnover-H2 + AF"]
+    """Control alone, topology alone and topology + control, per scheme, for one grid and threshold."""
+    ctrl, ctrl_thr = control_of(thr)
+    g = pp[pp["grid"] == grid]
+    d = pd.concat([g[(g["thr"] == thr) & (g["family"] == "topology")],
+                   g[(g["thr"] == ctrl_thr) & (g["feature"] == ctrl) & (g["family"] == "level")]])
+    labs = [ctrl] + [f"{f}{s}" for f in ("Turnover", "Turnover-H1", "Turnover-H2") for s in ("", f" + {ctrl}")]
     d = d[d["feature"].isin(labs)]
     if d.empty:
         print(f"{grid} {thr}: no results yet")
@@ -489,7 +537,7 @@ def plot_components(pp: pd.DataFrame, grid: str, thr: str) -> Optional[plt.Figur
             _empty_panel(ax, SCHEME_TITLES[scheme])
             continue
         for i, lab in enumerate(present):
-            fam = "level" if lab == "AF" else "topology"
+            fam = "level" if lab == ctrl else "topology"
             _dots_and_mean(ax, i, sd.loc[sd["feature"] == lab, "score"].to_numpy(), FAMILY_COLORS[fam], rng=rng)
         ax.axhline(0, color=INK_2, lw=0.8, zorder=1)
         ax.set_xticks(range(len(present)))
@@ -498,7 +546,7 @@ def plot_components(pp: pd.DataFrame, grid: str, thr: str) -> Optional[plt.Figur
     for ax in axes[:, 0]:
         ax.set_ylabel(SCORE_LABEL)
     _family_legend(fig, ["topology", "level"])
-    fig.suptitle(f"Level control (AF), topology and both, {grid}, {thr}", y=1.03, color=INK)
+    fig.suptitle(f"Level control ({ctrl}), topology and both, {grid}, {thr}", y=1.03, color=INK)
     fig.tight_layout()
     return fig
 
